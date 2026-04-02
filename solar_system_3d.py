@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence, cast
 
 from PIL import Image, ImageDraw, ImageFilter
+from panda3d.core import AlphaTestAttrib, SamplerState, Texture, TextureStage, TransparencyAttrib
 from ursina import AmbientLight, EditorCamera, Entity, Mesh, PointLight, Text, Ursina, Vec2, Vec3, application, camera, color, invoke, lerp, mouse, scene, window
 
 
@@ -557,6 +558,26 @@ def au_to_km(au: float) -> float:
     return au * 149_597_870.7
 
 
+def soften_texture_edges(entity: Entity, *, repeat: bool = True, transparent_border: bool = False) -> None:
+    if not hasattr(entity, 'model') or not entity.model:
+        return
+    if not hasattr(entity.model, 'setTexGen'):
+        return
+    texture = entity.texture
+    if texture is None:
+        return
+    if repeat:
+        texture.wrap_u = Texture.WM_repeat
+        texture.wrap_v = Texture.WM_repeat
+    if transparent_border:
+        texture.wrap_u = Texture.WM_border_color
+        texture.wrap_v = Texture.WM_border_color
+        texture.border_color = (0.0, 0.0, 0.0, 0.0)
+    texture.minfilter = SamplerState.FT_linear_mipmap_linear
+    texture.magfilter = SamplerState.FT_linear
+    texture.anisotropic_degree = 8
+
+
 class OrbitalBody:
     def __init__(
         self,
@@ -595,6 +616,7 @@ class OrbitalBody:
             scale=radius,
             collider=None,
         )
+        soften_texture_edges(self.body, repeat=True)
         self.orbit = None
         self.moons = []
         if distance > 0:
@@ -637,13 +659,16 @@ def add_deep_space_backdrop() -> None:
 
 
 def add_space_panorama() -> Entity:
-    return Entity(
+    panorama = Entity(
         model='sphere',
-        texture='assets/space_bg_8k.png',
+        texture='assets/space_bg_8k_dark.png',
         scale=3500,
         double_sided=True,
         color=color.white,
     )
+    soften_texture_edges(panorama, repeat=True)
+    panorama.texture_offset = Vec2(0.0012, 0)
+    return panorama
 
 
 def build_scene():
@@ -698,8 +723,8 @@ def build_scene():
     )
     flame_roots = []
     flame_tongues = []
-    flame_count = 18
-    flame_ring_rotations = [(0, 0, 0), (62, 0, 18), (-58, 0, -22), (0, 58, 34)]
+    flame_count = 32
+    flame_ring_rotations = [(0, 0, 0), (62, 0, 18), (-58, 0, -22), (0, 58, 34), (28, -46, 12), (-24, 42, -14)]
     for ring_index, ring_rotation in enumerate(flame_ring_rotations):
         flame_root = Entity(parent=sun.anchor, rotation=ring_rotation)
         flame_roots.append(flame_root)
@@ -709,8 +734,8 @@ def build_scene():
                 parent=flame_root,
                 model='quad',
                 texture='assets/sun_glow.png',
-                scale=(sun_radius * 0.34, sun_radius * 0.92),
-                position=(math.cos(angle) * sun_radius * 0.50, math.sin(angle) * sun_radius * 0.50, 0),
+                scale=(sun_radius * 0.12, sun_radius * 0.34),
+                position=(math.cos(angle) * sun_radius * 0.44, math.sin(angle) * sun_radius * 0.44, 0),
                 rotation_x=90,
                 rotation_y=i * (360 / flame_count),
                 rotation_z=i * (360 / flame_count),
@@ -779,6 +804,10 @@ def build_scene():
         color=color.rgba(255, 210, 120, 110),
         double_sided=True,
     )
+    soften_texture_edges(earth_night, repeat=True, transparent_border=True)
+    earth_night.setTransparency(TransparencyAttrib.MAlpha)
+    earth_night.setDepthWrite(False)
+    earth_night.setBin('transparent', 1)
     earth_clouds = Entity(
         parent=earth.visual_root,
         model='sphere',
@@ -787,6 +816,11 @@ def build_scene():
         color=color.rgba(255, 255, 255, 122),
         double_sided=True,
     )
+    soften_texture_edges(earth_clouds, repeat=True, transparent_border=True)
+    earth_clouds.setTransparency(TransparencyAttrib.MAlpha)
+    earth_clouds.setDepthWrite(False)
+    earth_clouds.setBin('transparent', 2)
+    earth_clouds.setAttrib(AlphaTestAttrib.make(AlphaTestAttrib.MGreaterEqual, 0.35))
 
     saturn_ring_back_entity = Entity(
         parent=saturn.axis_tilt,
@@ -798,6 +832,11 @@ def build_scene():
         color=color.rgba(255, 255, 255, 120),
         double_sided=True,
     )
+    soften_texture_edges(saturn_ring_back_entity, repeat=False, transparent_border=True)
+    saturn_ring_back_entity.setTransparency(TransparencyAttrib.MAlpha)
+    saturn_ring_back_entity.setDepthWrite(False)
+    saturn_ring_back_entity.setBin('transparent', 0)
+    saturn_ring_back_entity.setAttrib(AlphaTestAttrib.make(AlphaTestAttrib.MGreaterEqual, 0.2))
     saturn_ring_entity = Entity(
         parent=saturn.axis_tilt,
         model='quad',
@@ -808,6 +847,11 @@ def build_scene():
         color=color.rgba(255, 255, 255, 210),
         double_sided=True,
     )
+    soften_texture_edges(saturn_ring_entity, repeat=False, transparent_border=True)
+    saturn_ring_entity.setTransparency(TransparencyAttrib.MAlpha)
+    saturn_ring_entity.setDepthWrite(False)
+    saturn_ring_entity.setBin('transparent', 1)
+    saturn_ring_entity.setAttrib(AlphaTestAttrib.make(AlphaTestAttrib.MGreaterEqual, 0.25))
 
     def add_scaled_moon(parent_body: OrbitalBody, moon_name: str, parent_transform, orbit_speed_sign: float = 1.0) -> OrbitalBody:
         moon_data = MOON_DATA[moon_name]
@@ -1089,14 +1133,14 @@ def build_scene():
         for tongue, ring_index, index in flame_tongues:
             phase = t * (2.6 + index * 0.13) + index * 0.8
             angle = math.tau * (index / flame_count)
-            radial = flame_surface_radius * (1.02 + ring_index * 0.012) + math.sin(phase * 1.8) * current_sun_radius * 0.028
+            radial = flame_surface_radius * (0.89 + ring_index * 0.01) + math.sin(phase * 1.8) * current_sun_radius * 0.016
             tongue.rotation_y = index * (360 / flame_count) + math.sin(phase) * 14
             tongue.rotation_z = index * (360 / flame_count) + math.sin(phase * 1.2) * 18
             tongue.rotation_x = 90 + math.sin(phase * 0.7) * 11
             tongue.position = Vec3(math.cos(angle) * radial, math.sin(angle) * radial, math.sin(phase * 1.5) * current_sun_radius * (0.024 + ring_index * 0.004))
             tongue.scale = Vec2(
-                current_sun_radius * (0.17 + math.sin(phase * 1.7) * 0.03),
-                current_sun_radius * (0.47 + math.sin(phase * 2.4) * 0.12 + ring_index * 0.03),
+                current_sun_radius * (0.08 + math.sin(phase * 1.7) * 0.014),
+                current_sun_radius * (0.36 + math.sin(phase * 2.4) * 0.092 + ring_index * 0.024),
             )
             tongue.color = color.rgba(
                 255,
