@@ -3,16 +3,17 @@ from __future__ import annotations
 import argparse
 import math
 import random
+import sys
 import time as pytime
 from pathlib import Path
 from typing import Any, Callable, Sequence, cast
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
-from panda3d.core import AlphaTestAttrib, Point2, Point3, SamplerState, Texture, TextureStage, TransparencyAttrib
+from panda3d.core import AlphaTestAttrib, Point2, Point3, SamplerState, Texture, TextureStage, TransparencyAttrib, loadPrcFileData
 from ursina import AmbientLight, EditorCamera, Entity, Mesh, PointLight, Text, Ursina, Vec2, Vec3, application, camera, color, held_keys, invoke, lerp, load_texture, mouse, scene, window
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent if not getattr(sys, 'frozen', False) else Path(sys.executable).resolve().parent))
 ASSET_DIR = ROOT / 'assets'
 RNG = random.Random(20260401)
 
@@ -457,7 +458,7 @@ def selection_label_texture(text: str, font_path: str) -> Path:
     img.save(output_path)
     return output_path
 
-def pick_texture(preferred_real: str, fallback_generated: str) -> str:
+def pick_texture(preferred_real: str, fallback_generated: str):
     real_path = ASSET_DIR / preferred_real
     if real_path.exists():
         return f'assets/{preferred_real}'
@@ -481,7 +482,7 @@ def scaled_orbit_speed(period_days: float, earth_speed: float = 10.0, exponent: 
 
 def scaled_spin_speed(period_hours: float, earth_speed: float = 42.0, exponent: float = 0.3, retrograde: bool = False) -> float:
     speed = earth_speed * ((23.934 / abs(period_hours)) ** exponent)
-    return -speed if retrograde else speed
+    return speed if retrograde else -speed
 
 
 def scaled_moon_orbit_speed(period_days: float, base_period_days: float = 27.321661, base_speed: float = 20.0, exponent: float = 0.35) -> float:
@@ -530,7 +531,7 @@ VISUAL_SCALE = {
 
 PLANET_DATA: dict[str, dict[str, Any]] = {
     'Mercury': {'texture': lambda: pick_texture('mercury_real.jpg', 'mercury.png'), 'orbit_speed_days': 87.969, 'spin_hours': 1407.6, 'tilt': 0.03, 'orbit_tilt': 7.0, 'orbit_phase': 48, 'eccentricity': 0.2056, 'retrograde_spin': False, 'pole_ra': 281.01, 'pole_dec': 61.45},
-    'Venus': {'texture': lambda: pick_texture('venus_real.jpg', 'venus.png'), 'orbit_speed_days': 224.701, 'spin_hours': 5832.5, 'tilt': 177.3, 'orbit_tilt': 3.4, 'orbit_phase': 92, 'eccentricity': 0.0068, 'retrograde_spin': True, 'pole_ra': 272.76, 'pole_dec': 67.16},
+    'Venus': {'texture': lambda: pick_texture('venus_real.jpg', 'venus.png'), 'orbit_speed_days': 224.701, 'spin_hours': 5832.5, 'tilt': 2.7, 'orbit_tilt': 3.4, 'orbit_phase': 92, 'eccentricity': 0.0068, 'retrograde_spin': True, 'pole_ra': 272.76, 'pole_dec': 67.16},
     'Earth': {'texture': lambda: pick_texture('earth_real.jpg', 'earth.png'), 'orbit_speed_days': 365.256, 'spin_hours': 23.934, 'tilt': 23.44, 'orbit_tilt': 0.0, 'orbit_phase': 140, 'eccentricity': 0.0167, 'retrograde_spin': False, 'pole_ra': 0.0, 'pole_dec': 90.0},
     'Mars': {'texture': lambda: 'mars.png', 'orbit_speed_days': 686.98, 'spin_hours': 24.623, 'tilt': 25.19, 'orbit_tilt': 1.85, 'orbit_phase': 210, 'eccentricity': 0.0934, 'retrograde_spin': False, 'pole_ra': 317.68, 'pole_dec': 52.89},
     'Jupiter': {'texture': lambda: pick_texture('jupiter_real.jpg', 'jupiter.png'), 'orbit_speed_days': 4332.59, 'spin_hours': 9.93, 'tilt': 3.13, 'orbit_tilt': 1.3, 'orbit_phase': 280, 'eccentricity': 0.0489, 'retrograde_spin': False, 'pole_ra': 268.06, 'pole_dec': 64.5},
@@ -554,17 +555,17 @@ PLANET_REAL: dict[str, dict[str, float]] = {
 
 
 MOON_DATA: dict[str, dict[str, Any]] = {
-    'Moon': {'texture': lambda: pick_texture('moon_real.jpg', 'moon.png'), 'period_days': 27.321661, 'tilt': 1.5, 'orbit_tilt': 5.1, 'orbit_phase': 35, 'eccentricity': 0.0549, 'orbit_color': color.rgba(85, 100, 150, 80)},
-    'Phobos': {'texture': lambda: 'phobos.png', 'period_days': 0.31891, 'tilt': 0.0, 'orbit_tilt': 1.1, 'orbit_phase': 10, 'eccentricity': 0.0151, 'orbit_color': color.rgba(120, 85, 65, 80)},
-    'Deimos': {'texture': lambda: 'deimos.png', 'period_days': 1.26244, 'tilt': 0.0, 'orbit_tilt': 1.5, 'orbit_phase': 200, 'eccentricity': 0.0002, 'orbit_color': color.rgba(120, 85, 65, 80)},
-    'Io': {'texture': lambda: 'io.png', 'period_days': 1.769, 'tilt': 0.0, 'orbit_tilt': 0.04, 'orbit_phase': 40, 'eccentricity': 0.0041, 'orbit_color': color.rgba(135, 120, 80, 80)},
-    'Europa': {'texture': lambda: 'europa.png', 'period_days': 3.551, 'tilt': 0.0, 'orbit_tilt': 0.1, 'orbit_phase': 120, 'eccentricity': 0.0094, 'orbit_color': color.rgba(120, 125, 150, 80)},
-    'Ganymede': {'texture': lambda: 'ganymede.png', 'period_days': 7.155, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 210, 'eccentricity': 0.0013, 'orbit_color': color.rgba(110, 100, 88, 80)},
-    'Callisto': {'texture': lambda: 'callisto.png', 'period_days': 16.689, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 300, 'eccentricity': 0.0074, 'orbit_color': color.rgba(100, 90, 82, 80)},
-    'Titan': {'texture': lambda: 'titan.png', 'period_days': 15.945, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 60, 'eccentricity': 0.0288, 'orbit_color': color.rgba(130, 112, 80, 80)},
-    'Rhea': {'texture': lambda: 'rhea.png', 'period_days': 4.518, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 250, 'eccentricity': 0.0010, 'orbit_color': color.rgba(110, 110, 115, 80)},
-    'Titania': {'texture': lambda: 'titania.png', 'period_days': 8.706, 'tilt': 0.0, 'orbit_tilt': 0.25, 'orbit_phase': 135, 'eccentricity': 0.0011, 'orbit_color': color.rgba(85, 120, 140, 80)},
-    'Triton': {'texture': lambda: 'triton.png', 'period_days': 5.877, 'tilt': 0.0, 'orbit_tilt': 156.8, 'orbit_phase': 45, 'eccentricity': 0.0, 'orbit_color': color.rgba(70, 95, 140, 80), 'retrograde_orbit': True},
+    'Moon': {'texture': lambda: pick_texture('moon_real.jpg', 'moon.png'), 'period_days': 27.321661, 'spin_hours': 27.321661 * 24.0, 'retrograde_spin': False, 'tilt': 1.5, 'orbit_tilt': 5.1, 'orbit_phase': 35, 'eccentricity': 0.0549, 'orbit_color': color.rgba(85, 100, 150, 80)},
+    'Phobos': {'texture': lambda: 'phobos.png', 'period_days': 0.31891, 'spin_hours': 0.31891 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 1.1, 'orbit_phase': 10, 'eccentricity': 0.0151, 'orbit_color': color.rgba(120, 85, 65, 80)},
+    'Deimos': {'texture': lambda: 'deimos.png', 'period_days': 1.26244, 'spin_hours': 1.26244 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 1.5, 'orbit_phase': 200, 'eccentricity': 0.0002, 'orbit_color': color.rgba(120, 85, 65, 80)},
+    'Io': {'texture': lambda: 'io.png', 'period_days': 1.769, 'spin_hours': 1.769 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.04, 'orbit_phase': 40, 'eccentricity': 0.0041, 'orbit_color': color.rgba(135, 120, 80, 80)},
+    'Europa': {'texture': lambda: 'europa.png', 'period_days': 3.551, 'spin_hours': 3.551 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.1, 'orbit_phase': 120, 'eccentricity': 0.0094, 'orbit_color': color.rgba(120, 125, 150, 80)},
+    'Ganymede': {'texture': lambda: 'ganymede.png', 'period_days': 7.155, 'spin_hours': 7.155 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 210, 'eccentricity': 0.0013, 'orbit_color': color.rgba(110, 100, 88, 80)},
+    'Callisto': {'texture': lambda: 'callisto.png', 'period_days': 16.689, 'spin_hours': 16.689 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 300, 'eccentricity': 0.0074, 'orbit_color': color.rgba(100, 90, 82, 80)},
+    'Titan': {'texture': lambda: 'titan.png', 'period_days': 15.945, 'spin_hours': 15.945 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 60, 'eccentricity': 0.0288, 'orbit_color': color.rgba(130, 112, 80, 80)},
+    'Rhea': {'texture': lambda: 'rhea.png', 'period_days': 4.518, 'spin_hours': 4.518 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 250, 'eccentricity': 0.0010, 'orbit_color': color.rgba(110, 110, 115, 80)},
+    'Titania': {'texture': lambda: 'titania.png', 'period_days': 8.706, 'spin_hours': 8.706 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.25, 'orbit_phase': 135, 'eccentricity': 0.0011, 'orbit_color': color.rgba(85, 120, 140, 80)},
+    'Triton': {'texture': lambda: 'triton.png', 'period_days': 5.877, 'spin_hours': 5.877 * 24.0, 'retrograde_spin': True, 'tilt': 0.0, 'orbit_tilt': 156.8, 'orbit_phase': 45, 'eccentricity': 0.0, 'orbit_color': color.rgba(70, 95, 140, 80), 'retrograde_orbit': True},
 }
 
 
@@ -687,7 +688,7 @@ class OrbitalBody:
                 math.sqrt(max(1e-6, 1.0 - self.eccentricity)) * math.cos(eccentric_anomaly / 2.0),
             )
             orbital_radius = self.distance * (1.0 - self.eccentricity * math.cos(eccentric_anomaly))
-            self.pivot.rotation_y = math.degrees(true_anomaly)
+            self.pivot.rotation_y = -math.degrees(true_anomaly)
             self.anchor.position = Vec3(orbital_radius, 0, 0)
         self.spin_pivot.rotation_y += self.spin_speed * dt * speed
         for moon in self.moons:
@@ -710,14 +711,25 @@ def add_deep_space_backdrop() -> None:
 
 
 def add_space_panorama() -> Entity:
+    preferred_panorama = ASSET_DIR / 'space_bg_8k_dark.png'
+    if preferred_panorama.exists():
+        panorama_texture = 'assets/space_bg_8k_dark.png'
+    else:
+        panorama_texture = None
     panorama = Entity(
+        parent=scene,
         model='sphere',
-        texture='assets/space_bg_8k_dark.png',
+        texture=panorama_texture,
+        position=camera.world_position,
         scale=3500,
         double_sided=True,
-        color=color.white,
+        color=color.white if panorama_texture is not None else color.black,
+        unlit=True,
     )
-    soften_texture_edges(panorama, repeat=True)
+    if panorama_texture is not None:
+        soften_texture_edges(panorama, repeat=True)
+    panorama.setDepthWrite(False)
+    panorama.setBin('background', 0)
     panorama.texture_offset = Vec2(0.0012, 0)
     return panorama
 
@@ -805,7 +817,7 @@ def spawn_belt_asteroid(parent: Entity, inner_radius: float, outer_radius: float
 def build_scene():
     dark_space = color.black
     ui_font = '/c/Windows/Fonts/msyh.ttc'
-    window.title = '太阳系 3D 模型'
+    window.title = 'AI生成-太阳系模拟演示系统-flicube.com'
     window.color = dark_space
     window.fps_counter.enabled = True
     window.exit_button.visible = False
@@ -825,7 +837,7 @@ def build_scene():
     space_panorama = add_space_panorama()
 
     sun_radius = scaled_body_radius(PLANET_REAL['Sun']['radius_km'], VISUAL_SCALE['sun_body_scale_factor'])
-    sun = OrbitalBody('Sun', pick_texture('sun_real.jpg', 'sun.png'), 0, sun_radius, 0, 6)
+    sun = OrbitalBody('Sun', pick_texture('sun_real.jpg', 'sun.png'), 0, sun_radius, 0, -6)
     PointLight(parent=sun.anchor, color=color.rgb(255, 225, 170), shadows=False)
 
     sun_shell_1 = Entity(
@@ -864,7 +876,7 @@ def build_scene():
             tongue = Entity(
                 parent=flame_root,
                 model='quad',
-                texture='assets/sun_glow.png',
+        texture='assets/sun_glow.png',
                 scale=(sun_radius * 0.12, sun_radius * 0.34),
                 position=(math.cos(angle) * sun_radius * 0.44, math.sin(angle) * sun_radius * 0.44, 0),
                 rotation_x=90,
@@ -998,6 +1010,8 @@ def build_scene():
         parent_real = PLANET_REAL[parent_body.name]
         texture_fn = cast(Callable[[], str], moon_data['texture'])
         period_days = float(moon_data['period_days'])
+        spin_hours = float(moon_data.get('spin_hours', period_days * 24.0))
+        retrograde_spin = bool(moon_data.get('retrograde_spin', False))
         tilt = float(moon_data['tilt'])
         orbit_tilt = float(moon_data['orbit_tilt'])
         orbit_phase = float(moon_data['orbit_phase'])
@@ -1024,7 +1038,7 @@ def build_scene():
             orbit_distance,
             scaled_visual_radius(radius_km, VISUAL_SCALE['moon_radius_factor'], VISUAL_SCALE['min_moon_radius']),
             scaled_moon_orbit_speed(period_days) * orbit_speed_sign,
-            0,
+            scaled_spin_speed(spin_hours, retrograde=retrograde_spin),
             tilt=tilt,
             orbit_tilt=orbit_tilt,
             orbit_phase=orbit_phase,
@@ -1075,20 +1089,15 @@ def build_scene():
         font=ui_font,
     )
 
-    editor_camera = EditorCamera(rotation_smoothing=2, rotate_key='right mouse', move_speed=60, pan_speed=(10, 10), zoom_speed=0, enabled=True)
-    editor_camera.position = (0, 18, -150)
-    editor_camera.look_at(sun.anchor.world_position)
-    editor_camera.target_z = 0
-    camera.parent = editor_camera
-    camera.position = Vec3(0, 0, 0)
-    camera.rotation = Vec3(0, 0, 0)
+    editor_camera = EditorCamera(rotation_smoothing=0, rotate_key='right mouse', move_speed=0, pan_speed=(0, 0), zoom_speed=0, enabled=True)
+    editor_camera.ignore = True
     held_key_state: Any = held_keys
     wasd_move_speed = 38
     earth_free_wasd_speed = 1.7
 
     simulation_speed = 1.45
     last_tick = pytime.perf_counter()
-    pan_sensitivity = 180
+    pan_sensitivity = 1620
     camera_mode = 'overview'
     overview_position = Vec3(0, 18, -150)
     target_body = mercury
@@ -1102,8 +1111,9 @@ def build_scene():
         'Uranus': 14.4,
         'Neptune': 14.0,
     }
-    earth_free_pan_sensitivity = 28
+    earth_free_pan_sensitivity = 252
     earth_free_rotate_sensitivity = 110
+    overview_rotate_sensitivity = 180
     orbits_visible = True
     paused = False
     selected_body: OrbitalBody | None = None
@@ -1114,7 +1124,7 @@ def build_scene():
     selected_follow_distance = 12.0
     selected_follow_yaw = 0.0
     selected_follow_pitch = 12.0
-    selected_follow_pan_sensitivity = 90.0
+    selected_follow_pan_sensitivity = 270.0
     selected_follow_yaw_speed = 82.0
     selected_follow_pitch_speed = 58.0
     selection_label_position = Vec2(0.07, 0.03)
@@ -1200,7 +1210,11 @@ def build_scene():
 
     def attach_camera_to_overview_controls() -> None:
         nonlocal camera_mode
-        world_position = Vec3(camera.world_position)
+        if camera.parent != scene:
+            camera.parent = scene
+        world_position = Vec3(overview_position)
+        camera.world_position = world_position
+        camera.look_at(sun.anchor.world_position, up=Vec3(0, 1, 0))
         world_rotation = Vec3(camera.world_rotation)
         editor_camera.position = world_position
         editor_camera.rotation = world_rotation
@@ -1212,13 +1226,25 @@ def build_scene():
         camera_mode = 'overview'
 
     def clear_selection(*, stop_follow: bool) -> None:
-        nonlocal selected_body, selection_label_position, selected_focus_offset
+        nonlocal selected_body, selection_label_position, selected_focus_offset, camera_mode
         selected_body = None
         selected_focus_offset = Vec3(0, 0, 0)
         selection_label_position = Vec2(0.07, 0.03)
         refresh_selection_ui()
         if stop_follow:
-            attach_camera_to_overview_controls()
+            world_position = Vec3(camera.world_position)
+            world_rotation = Vec3(camera.world_rotation)
+            camera.parent = scene
+            camera.world_position = world_position
+            camera.world_rotation = world_rotation
+            editor_camera.position = world_position
+            editor_camera.rotation = world_rotation
+            editor_camera.enabled = True
+            camera.parent = editor_camera
+            camera.position = Vec3(0, 0, 0)
+            camera.rotation = Vec3(0, 0, 0)
+            editor_camera.target_z = 0
+            camera_mode = 'overview'
         refresh_target_ui()
 
     def begin_selected_follow(new_body: OrbitalBody) -> None:
@@ -1328,6 +1354,7 @@ def build_scene():
 
     refresh_orbit_status_text()
     refresh_selection_ui()
+    attach_camera_to_overview_controls()
     refresh_target_ui()
 
     def input(key):
@@ -1387,14 +1414,13 @@ def build_scene():
 
         if camera_mode == 'overview':
             if held_key_state.get('w', False):
-                camera.world_position += camera.forward * wasd_move_speed * dt
+                editor_camera.position += editor_camera.forward * wasd_move_speed * dt
             if held_key_state.get('s', False):
-                camera.world_position -= camera.forward * wasd_move_speed * dt
+                editor_camera.position -= editor_camera.forward * wasd_move_speed * dt
             if held_key_state.get('a', False):
-                camera.world_position -= camera.right * wasd_move_speed * dt
+                editor_camera.position -= editor_camera.right * wasd_move_speed * dt
             if held_key_state.get('d', False):
-                camera.world_position += camera.right * wasd_move_speed * dt
-            editor_camera.position = camera.world_position
+                editor_camera.position += editor_camera.right * wasd_move_speed * dt
         elif camera_mode == 'earth_free':
             if held_key_state.get('w', False):
                 camera.position += camera.forward * earth_free_wasd_speed
@@ -1416,9 +1442,11 @@ def build_scene():
 
         if mouse.left and camera_mode == 'overview':
             zoom_compensation = max(0.35, abs(editor_camera.target_z) * 0.08)
-            camera.world_position -= camera.right * mouse.velocity[0] * pan_sensitivity * dt * zoom_compensation
-            camera.world_position -= camera.up * mouse.velocity[1] * pan_sensitivity * dt * zoom_compensation
-            editor_camera.position = camera.world_position
+            editor_camera.position -= editor_camera.right * mouse.velocity[0] * pan_sensitivity * dt * zoom_compensation
+            editor_camera.position -= editor_camera.up * mouse.velocity[1] * pan_sensitivity * dt * zoom_compensation
+        elif mouse.right and camera_mode == 'overview':
+            editor_camera.rotation_x = max(-89, min(89, editor_camera.rotation_x - mouse.velocity[1] * overview_rotate_sensitivity))
+            editor_camera.rotation_y += mouse.velocity[0] * overview_rotate_sensitivity
         elif mouse.left and camera_mode == 'earth_free':
             camera.position -= camera.right * mouse.velocity[0] * earth_free_pan_sensitivity
             camera.position -= camera.up * mouse.velocity[1] * earth_free_pan_sensitivity
@@ -1691,7 +1719,10 @@ def main():
     args = parser.parse_args()
 
     ensure_assets()
-    app = Ursina(borderless=False)
+    loadPrcFileData('', 'window-title AI生成-太阳系模拟演示系统-flicube.com')
+    app = Ursina(title='AI生成-太阳系模拟演示系统-flicube.com', borderless=False)
+    window.title = 'AI生成-太阳系模拟演示系统-flicube.com'
+    application.asset_folder = ROOT
     update_fn = build_scene()
     globals()['update'] = update_fn
 
