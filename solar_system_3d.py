@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import random
 import sys
 import time as pytime
@@ -10,12 +11,67 @@ from typing import Any, Callable, Sequence, cast
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from panda3d.core import AlphaTestAttrib, Point2, Point3, SamplerState, Texture, TextureStage, TransparencyAttrib, loadPrcFileData
-from ursina import AmbientLight, EditorCamera, Entity, Mesh, PointLight, Text, Ursina, Vec2, Vec3, application, camera, color, held_keys, invoke, lerp, load_texture, mouse, scene, window
+from ursina import AmbientLight, EditorCamera, Entity, Mesh, PointLight, Text, Ursina, Vec2, Vec3, application, camera, color, destroy, held_keys, invoke, lerp, load_texture, mouse, scene, window
 
 
 ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent if not getattr(sys, 'frozen', False) else Path(sys.executable).resolve().parent))
 ASSET_DIR = ROOT / 'assets'
 RNG = random.Random(20260401)
+
+
+def resolve_ui_font_reference() -> str:
+    relative_candidates = [
+        'msyh.ttc',
+        'msyh.ttf',
+        'OpenSans-Regular.ttf',
+    ]
+    candidate_paths = [
+        ASSET_DIR / 'msyh.ttc',
+        ASSET_DIR / 'msyh.ttf',
+        ROOT / 'msyh.ttc',
+        ROOT / 'msyh.ttf',
+    ]
+    windows_drive = os.environ.get('SystemDrive', 'C:')
+    windows_dir = Path(f'{windows_drive}\\Windows')
+    candidate_paths.extend([
+        windows_dir / 'Fonts' / 'msyh.ttc',
+        windows_dir / 'Fonts' / 'msyh.ttf',
+        windows_dir / 'Fonts' / 'msyhbd.ttc',
+    ])
+
+    for candidate in relative_candidates:
+        if (ASSET_DIR / candidate).exists() or (ROOT / candidate).exists():
+            return candidate
+
+    for candidate in candidate_paths:
+        if candidate.exists():
+            candidate_str = str(candidate)
+            drive, tail = os.path.splitdrive(candidate_str)
+            if drive:
+                drive_letter = drive[0].lower()
+                normalized_tail = tail.replace('\\', '/')
+                return f'/{drive_letter}{normalized_tail}'
+            return candidate.as_posix()
+    return 'OpenSans-Regular.ttf'
+
+
+def load_label_font(font_reference: str, size: int) -> Any:
+    if font_reference.startswith('/') and len(font_reference) > 2 and font_reference[2] == '/':
+        font_reference = f'{font_reference[1].upper()}:{font_reference[2:]}'
+    reference_path = Path(font_reference)
+    candidate_paths = [reference_path] if reference_path.is_absolute() else [ASSET_DIR / font_reference, ROOT / font_reference]
+
+    for candidate in candidate_paths:
+        if candidate.exists():
+            try:
+                return ImageFont.truetype(str(candidate), size)
+            except OSError:
+                continue
+
+    try:
+        return ImageFont.truetype(font_reference, size)
+    except OSError:
+        return ImageFont.load_default()
 
 
 def clamp_channel(value: float, low: int = 0, high: int = 255) -> int:
@@ -377,6 +433,8 @@ def saturn_ring_back(path: Path, size: int = 1024) -> None:
 
 
 def selection_bracket_texture(path: Path, size: int = 512) -> None:
+    if path.exists():
+        return
     img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img, 'RGBA')
     margin = int(size * 0.17)
@@ -445,7 +503,7 @@ def selection_label_texture(text: str, font_path: str) -> Path:
     draw = ImageDraw.Draw(img, 'RGBA')
     draw.rounded_rectangle((6, 10, canvas_width - 6, canvas_height - 10), radius=18, fill=(10, 16, 26, 170), outline=(96, 220, 255, 80), width=2)
     try:
-        font = ImageFont.truetype(font_path.replace('/c/', 'C:/'), 40)
+        font = load_label_font(font_path, 40)
     except OSError:
         font = ImageFont.load_default()
     text_bbox = draw.textbbox((0, 0), text, font=font)
@@ -533,11 +591,11 @@ PLANET_DATA: dict[str, dict[str, Any]] = {
     'Mercury': {'texture': lambda: pick_texture('mercury_real.jpg', 'mercury.png'), 'orbit_speed_days': 87.969, 'spin_hours': 1407.6, 'tilt': 0.03, 'orbit_tilt': 7.0, 'orbit_phase': 48, 'eccentricity': 0.2056, 'retrograde_spin': False, 'pole_ra': 281.01, 'pole_dec': 61.45},
     'Venus': {'texture': lambda: pick_texture('venus_real.jpg', 'venus.png'), 'orbit_speed_days': 224.701, 'spin_hours': 5832.5, 'tilt': 2.7, 'orbit_tilt': 3.4, 'orbit_phase': 92, 'eccentricity': 0.0068, 'retrograde_spin': True, 'pole_ra': 272.76, 'pole_dec': 67.16},
     'Earth': {'texture': lambda: pick_texture('earth_real.jpg', 'earth.png'), 'orbit_speed_days': 365.256, 'spin_hours': 23.934, 'tilt': 23.44, 'orbit_tilt': 0.0, 'orbit_phase': 140, 'eccentricity': 0.0167, 'retrograde_spin': False, 'pole_ra': 0.0, 'pole_dec': 90.0},
-    'Mars': {'texture': lambda: 'mars.png', 'orbit_speed_days': 686.98, 'spin_hours': 24.623, 'tilt': 25.19, 'orbit_tilt': 1.85, 'orbit_phase': 210, 'eccentricity': 0.0934, 'retrograde_spin': False, 'pole_ra': 317.68, 'pole_dec': 52.89},
+    'Mars': {'texture': lambda: pick_texture('mars_real.jpg', 'mars.png'), 'orbit_speed_days': 686.98, 'spin_hours': 24.623, 'tilt': 25.19, 'orbit_tilt': 1.85, 'orbit_phase': 210, 'eccentricity': 0.0934, 'retrograde_spin': False, 'pole_ra': 317.68, 'pole_dec': 52.89},
     'Jupiter': {'texture': lambda: pick_texture('jupiter_real.jpg', 'jupiter.png'), 'orbit_speed_days': 4332.59, 'spin_hours': 9.93, 'tilt': 3.13, 'orbit_tilt': 1.3, 'orbit_phase': 280, 'eccentricity': 0.0489, 'retrograde_spin': False, 'pole_ra': 268.06, 'pole_dec': 64.5},
     'Saturn': {'texture': lambda: pick_texture('saturn_real.jpg', 'saturn.png'), 'orbit_speed_days': 10759.22, 'spin_hours': 10.66, 'tilt': 26.7, 'orbit_tilt': 2.5, 'orbit_phase': 320, 'eccentricity': 0.0565, 'retrograde_spin': False, 'pole_ra': 40.72, 'pole_dec': 83.54},
-    'Uranus': {'texture': lambda: 'uranus.png', 'orbit_speed_days': 30688.5, 'spin_hours': 17.24, 'tilt': 97.77, 'orbit_tilt': 0.77, 'orbit_phase': 18, 'eccentricity': 0.0463, 'retrograde_spin': False, 'pole_ra': 257.31, 'pole_dec': -15.17},
-    'Neptune': {'texture': lambda: 'neptune.png', 'orbit_speed_days': 60182.0, 'spin_hours': 16.11, 'tilt': 28.32, 'orbit_tilt': 1.77, 'orbit_phase': 70, 'eccentricity': 0.0086, 'retrograde_spin': False, 'pole_ra': 299.36, 'pole_dec': -8.93},
+    'Uranus': {'texture': lambda: pick_texture('uranus_real.jpg', 'uranus.png'), 'orbit_speed_days': 30688.5, 'spin_hours': 17.24, 'tilt': 97.77, 'orbit_tilt': 0.77, 'orbit_phase': 18, 'eccentricity': 0.0463, 'retrograde_spin': True, 'pole_ra': 257.31, 'pole_dec': -15.17},
+    'Neptune': {'texture': lambda: pick_texture('neptune_real.jpg', 'neptune.png'), 'orbit_speed_days': 60182.0, 'spin_hours': 16.11, 'tilt': 28.32, 'orbit_tilt': 1.77, 'orbit_phase': 70, 'eccentricity': 0.0086, 'retrograde_spin': False, 'pole_ra': 299.36, 'pole_dec': -8.93},
 }
 
 
@@ -555,17 +613,17 @@ PLANET_REAL: dict[str, dict[str, float]] = {
 
 
 MOON_DATA: dict[str, dict[str, Any]] = {
-    'Moon': {'texture': lambda: pick_texture('moon_real.jpg', 'moon.png'), 'period_days': 27.321661, 'spin_hours': 27.321661 * 24.0, 'retrograde_spin': False, 'tilt': 1.5, 'orbit_tilt': 5.1, 'orbit_phase': 35, 'eccentricity': 0.0549, 'orbit_color': color.rgba(85, 100, 150, 80)},
-    'Phobos': {'texture': lambda: 'phobos.png', 'period_days': 0.31891, 'spin_hours': 0.31891 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 1.1, 'orbit_phase': 10, 'eccentricity': 0.0151, 'orbit_color': color.rgba(120, 85, 65, 80)},
-    'Deimos': {'texture': lambda: 'deimos.png', 'period_days': 1.26244, 'spin_hours': 1.26244 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 1.5, 'orbit_phase': 200, 'eccentricity': 0.0002, 'orbit_color': color.rgba(120, 85, 65, 80)},
-    'Io': {'texture': lambda: 'io.png', 'period_days': 1.769, 'spin_hours': 1.769 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.04, 'orbit_phase': 40, 'eccentricity': 0.0041, 'orbit_color': color.rgba(135, 120, 80, 80)},
-    'Europa': {'texture': lambda: 'europa.png', 'period_days': 3.551, 'spin_hours': 3.551 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.1, 'orbit_phase': 120, 'eccentricity': 0.0094, 'orbit_color': color.rgba(120, 125, 150, 80)},
-    'Ganymede': {'texture': lambda: 'ganymede.png', 'period_days': 7.155, 'spin_hours': 7.155 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 210, 'eccentricity': 0.0013, 'orbit_color': color.rgba(110, 100, 88, 80)},
-    'Callisto': {'texture': lambda: 'callisto.png', 'period_days': 16.689, 'spin_hours': 16.689 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 300, 'eccentricity': 0.0074, 'orbit_color': color.rgba(100, 90, 82, 80)},
-    'Titan': {'texture': lambda: 'titan.png', 'period_days': 15.945, 'spin_hours': 15.945 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 60, 'eccentricity': 0.0288, 'orbit_color': color.rgba(130, 112, 80, 80)},
-    'Rhea': {'texture': lambda: 'rhea.png', 'period_days': 4.518, 'spin_hours': 4.518 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 250, 'eccentricity': 0.0010, 'orbit_color': color.rgba(110, 110, 115, 80)},
-    'Titania': {'texture': lambda: 'titania.png', 'period_days': 8.706, 'spin_hours': 8.706 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.25, 'orbit_phase': 135, 'eccentricity': 0.0011, 'orbit_color': color.rgba(85, 120, 140, 80)},
-    'Triton': {'texture': lambda: 'triton.png', 'period_days': 5.877, 'spin_hours': 5.877 * 24.0, 'retrograde_spin': True, 'tilt': 0.0, 'orbit_tilt': 156.8, 'orbit_phase': 45, 'eccentricity': 0.0, 'orbit_color': color.rgba(70, 95, 140, 80), 'retrograde_orbit': True},
+    'Moon': {'texture': lambda: pick_texture('moon_real.jpg', 'moon.png'), 'period_days': 27.321661, 'spin_hours': 27.321661 * 24.0 * 0.1, 'retrograde_spin': False, 'tilt': 1.5, 'orbit_tilt': 5.1, 'eccentricity': 0.0549, 'orbit_color': color.rgba(85, 100, 150, 80), 'orbit_phase': 35, 'synchronous_lock': True, 'texture_rotation_y': 180.0},
+    'Phobos': {'texture': lambda: pick_texture('phobos_real.jpg', 'phobos.png'), 'period_days': 0.31891, 'spin_hours': 0.31891 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 1.1, 'orbit_phase': 10, 'eccentricity': 0.0151, 'orbit_color': color.rgba(120, 85, 65, 80)},
+    'Deimos': {'texture': lambda: pick_texture('deimos_real.jpg', 'deimos.png'), 'period_days': 1.26244, 'spin_hours': 1.26244 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 1.5, 'orbit_phase': 200, 'eccentricity': 0.0002, 'orbit_color': color.rgba(120, 85, 65, 80)},
+    'Io': {'texture': lambda: pick_texture('io_real.jpg', 'io.png'), 'period_days': 1.769, 'spin_hours': 1.769 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.04, 'orbit_phase': 40, 'eccentricity': 0.0041, 'orbit_color': color.rgba(135, 120, 80, 80)},
+    'Europa': {'texture': lambda: pick_texture('europa_real.jpg', 'europa.png'), 'period_days': 3.551, 'spin_hours': 3.551 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.1, 'orbit_phase': 120, 'eccentricity': 0.0094, 'orbit_color': color.rgba(120, 125, 150, 80)},
+    'Ganymede': {'texture': lambda: pick_texture('ganymede_real.jpg', 'ganymede.png'), 'period_days': 7.155, 'spin_hours': 7.155 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 210, 'eccentricity': 0.0013, 'orbit_color': color.rgba(110, 100, 88, 80)},
+    'Callisto': {'texture': lambda: pick_texture('callisto_real.jpg', 'callisto.png'), 'period_days': 16.689, 'spin_hours': 16.689 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 300, 'eccentricity': 0.0074, 'orbit_color': color.rgba(100, 90, 82, 80)},
+    'Titan': {'texture': lambda: pick_texture('titan_real.jpg', 'titan.png'), 'period_days': 15.945, 'spin_hours': 15.945 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 60, 'eccentricity': 0.0288, 'orbit_color': color.rgba(130, 112, 80, 80)},
+    'Rhea': {'texture': lambda: pick_texture('rhea_real.jpg', 'rhea.png'), 'period_days': 4.518, 'spin_hours': 4.518 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 250, 'eccentricity': 0.0010, 'orbit_color': color.rgba(110, 110, 115, 80)},
+    'Titania': {'texture': lambda: pick_texture('titania_real.jpg', 'titania.png'), 'period_days': 8.706, 'spin_hours': 8.706 * 24.0, 'retrograde_spin': False, 'tilt': 0.0, 'orbit_tilt': 0.25, 'orbit_phase': 135, 'eccentricity': 0.0011, 'orbit_color': color.rgba(85, 120, 140, 80)},
+    'Triton': {'texture': lambda: pick_texture('triton_real.jpg', 'triton.png'), 'period_days': 5.877, 'spin_hours': 5.877 * 24.0, 'retrograde_spin': True, 'tilt': 0.0, 'orbit_tilt': 156.8, 'orbit_phase': 45, 'eccentricity': 0.0, 'orbit_color': color.rgba(70, 95, 140, 80), 'retrograde_orbit': True},
 }
 
 
@@ -749,7 +807,7 @@ def spawn_asteroid(parent: Entity, spawn_radius: float) -> dict[str, Any]:
     asteroid = Entity(
         parent=parent,
         model='sphere',
-        texture='assets/phobos.png',
+        texture='assets/asteroid_real.jpg',
         scale=(base_scale * RNG.uniform(1.5, 2.4), base_scale * RNG.uniform(0.7, 1.1), base_scale * RNG.uniform(0.75, 1.2)),
         position=start_position,
         rotation=(RNG.uniform(0, 360), RNG.uniform(0, 360), RNG.uniform(0, 360)),
@@ -797,7 +855,7 @@ def spawn_belt_asteroid(parent: Entity, inner_radius: float, outer_radius: float
     asteroid = Entity(
         parent=parent,
         model='sphere',
-        texture='assets/phobos.png',
+        texture='assets/asteroid_real.jpg',
         scale=(base_scale * RNG.uniform(1.4, 2.3), base_scale * RNG.uniform(0.65, 1.1), base_scale * RNG.uniform(0.75, 1.35)),
         position=(math.cos(orbit_angle) * orbit_radius, vertical_offset, math.sin(orbit_angle) * orbit_radius),
         rotation=(RNG.uniform(0, 360), RNG.uniform(0, 360), RNG.uniform(0, 360)),
@@ -816,7 +874,7 @@ def spawn_belt_asteroid(parent: Entity, inner_radius: float, outer_radius: float
 
 def build_scene():
     dark_space = color.black
-    ui_font = '/c/Windows/Fonts/msyh.ttc'
+    ui_font = resolve_ui_font_reference()
     window.title = 'AI生成-太阳系模拟演示系统-flicube.com'
     window.color = dark_space
     window.fps_counter.enabled = True
@@ -1012,6 +1070,8 @@ def build_scene():
         period_days = float(moon_data['period_days'])
         spin_hours = float(moon_data.get('spin_hours', period_days * 24.0))
         retrograde_spin = bool(moon_data.get('retrograde_spin', False))
+        synchronous_lock = bool(moon_data.get('synchronous_lock', False))
+        texture_rotation_y = float(moon_data.get('texture_rotation_y', 0.0))
         tilt = float(moon_data['tilt'])
         orbit_tilt = float(moon_data['orbit_tilt'])
         orbit_phase = float(moon_data['orbit_phase'])
@@ -1038,7 +1098,7 @@ def build_scene():
             orbit_distance,
             scaled_visual_radius(radius_km, VISUAL_SCALE['moon_radius_factor'], VISUAL_SCALE['min_moon_radius']),
             scaled_moon_orbit_speed(period_days) * orbit_speed_sign,
-            scaled_spin_speed(spin_hours, retrograde=retrograde_spin),
+            0.0 if synchronous_lock else scaled_spin_speed(spin_hours, retrograde=retrograde_spin),
             tilt=tilt,
             orbit_tilt=orbit_tilt,
             orbit_phase=orbit_phase,
@@ -1046,6 +1106,7 @@ def build_scene():
             parent=parent_transform,
             orbit_color=orbit_color,
         )
+        moon.visual_root.rotation_y = texture_rotation_y
         parent_body.add_moon(moon)
         return moon
 
@@ -1380,6 +1441,8 @@ def build_scene():
             editor_camera.position -= camera.forward * cam_distance
         elif key == 'scroll up' and camera_mode == 'earth_free':
             camera.position += camera.forward * 2.5
+        elif key == 'scroll up' and camera_mode == 'earth_follow':
+            camera.position += camera.forward * 2.5
         elif key == 'scroll down' and camera_mode == 'earth_follow':
             camera_mode = 'earth_free'
             camera.position -= camera.forward * 2.5
@@ -1423,13 +1486,13 @@ def build_scene():
                 editor_camera.position += editor_camera.right * wasd_move_speed * dt
         elif camera_mode == 'earth_free':
             if held_key_state.get('w', False):
-                camera.position += camera.forward * earth_free_wasd_speed
+                camera.position += camera.forward * earth_free_wasd_speed * dt
             if held_key_state.get('s', False):
-                camera.position -= camera.forward * earth_free_wasd_speed
+                camera.position -= camera.forward * earth_free_wasd_speed * dt
             if held_key_state.get('a', False):
-                camera.position -= camera.right * earth_free_wasd_speed
+                camera.position -= camera.right * earth_free_wasd_speed * dt
             if held_key_state.get('d', False):
-                camera.position += camera.right * earth_free_wasd_speed
+                camera.position += camera.right * earth_free_wasd_speed * dt
         elif camera_mode in ('selected_follow', 'transition_selected_follow') and selected_body is not None:
             if held_key_state.get('a', False):
                 selected_follow_yaw -= selected_follow_yaw_speed * dt
@@ -1448,8 +1511,8 @@ def build_scene():
             editor_camera.rotation_x = max(-89, min(89, editor_camera.rotation_x - mouse.velocity[1] * overview_rotate_sensitivity))
             editor_camera.rotation_y += mouse.velocity[0] * overview_rotate_sensitivity
         elif mouse.left and camera_mode == 'earth_free':
-            camera.position -= camera.right * mouse.velocity[0] * earth_free_pan_sensitivity
-            camera.position -= camera.up * mouse.velocity[1] * earth_free_pan_sensitivity
+            camera.position -= camera.right * mouse.velocity[0] * earth_free_pan_sensitivity * dt
+            camera.position -= camera.up * mouse.velocity[1] * earth_free_pan_sensitivity * dt
         elif mouse.left and camera_mode in ('selected_follow', 'transition_selected_follow') and selected_body is not None:
             pan_scale = max(0.01, selected_follow_distance * 0.018)
             selected_focus_offset -= camera.right * mouse.velocity[0] * selected_follow_pan_sensitivity * dt * pan_scale
@@ -1569,7 +1632,8 @@ def build_scene():
                     210,
                 )
                 if asteroid_entity.position.length() < sun.body.scale_x * 0.7 or asteroid_entity.position.length() > asteroid_spawn_radius * 1.12:
-                    asteroid_entity.disable()
+                    destroy(asteroid_tail)
+                    destroy(asteroid_entity)
                     replacement = spawn_asteroid(scene, asteroid_spawn_radius)
                     asteroid_info['entity'] = replacement['entity']
                     asteroid_info['tail'] = replacement['tail']
