@@ -7,9 +7,9 @@ import time as pytime
 from pathlib import Path
 from typing import Any, Callable, Sequence, cast
 
-from PIL import Image, ImageDraw, ImageFilter
-from panda3d.core import AlphaTestAttrib, SamplerState, Texture, TextureStage, TransparencyAttrib
-from ursina import AmbientLight, EditorCamera, Entity, Mesh, PointLight, Text, Ursina, Vec2, Vec3, application, camera, color, invoke, lerp, mouse, scene, window
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from panda3d.core import AlphaTestAttrib, Point2, Point3, SamplerState, Texture, TextureStage, TransparencyAttrib
+from ursina import AmbientLight, EditorCamera, Entity, Mesh, PointLight, Text, Ursina, Vec2, Vec3, application, camera, color, held_keys, invoke, lerp, load_texture, mouse, scene, window
 
 
 ROOT = Path(__file__).resolve().parent
@@ -375,12 +375,38 @@ def saturn_ring_back(path: Path, size: int = 1024) -> None:
     img.save(path)
 
 
+def selection_bracket_texture(path: Path, size: int = 512) -> None:
+    img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img, 'RGBA')
+    margin = int(size * 0.17)
+    inner = int(size * 0.11)
+    thickness = max(3, int(size * 0.012))
+    color_rgba = (110, 235, 255, 190)
+
+    # top-left
+    draw.rectangle((margin, margin, margin + inner, margin + thickness), fill=color_rgba)
+    draw.rectangle((margin, margin, margin + thickness, margin + inner), fill=color_rgba)
+    # top-right
+    draw.rectangle((size - margin - inner, margin, size - margin, margin + thickness), fill=color_rgba)
+    draw.rectangle((size - margin - thickness, margin, size - margin, margin + inner), fill=color_rgba)
+    # bottom-left
+    draw.rectangle((margin, size - margin - thickness, margin + inner, size - margin), fill=color_rgba)
+    draw.rectangle((margin, size - margin - inner, margin + thickness, size - margin), fill=color_rgba)
+    # bottom-right
+    draw.rectangle((size - margin - inner, size - margin - thickness, size - margin, size - margin), fill=color_rgba)
+    draw.rectangle((size - margin - thickness, size - margin - inner, size - margin, size - margin), fill=color_rgba)
+
+    img = img.filter(ImageFilter.GaussianBlur(radius=size * 0.002))
+    img.save(path)
+
+
 def ensure_assets():
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
     nebula_texture(ASSET_DIR / 'deep_space.png')
     sun_texture(ASSET_DIR / 'sun.png')
     radial_glow(ASSET_DIR / 'sun_glow.png', (255, 214, 110), (255, 92, 0))
     radial_glow(ASSET_DIR / 'halo.png', (255, 245, 210), (255, 128, 0))
+    selection_bracket_texture(ASSET_DIR / 'selection_bracket.png')
     saturn_ring(ASSET_DIR / 'saturn_ring.png')
     saturn_ring_back(ASSET_DIR / 'saturn_ring_back.png')
 
@@ -406,6 +432,30 @@ def ensure_assets():
     rocky_texture(ASSET_DIR / 'rhea.png', [(116, 108, 102), (164, 156, 148), (210, 204, 198)], 16, crater_count=50)
     rocky_texture(ASSET_DIR / 'titania.png', [(124, 140, 152), (174, 194, 204), (224, 240, 246)], 17, crater_count=45)
     rocky_texture(ASSET_DIR / 'triton.png', [(116, 140, 160), (154, 182, 200), (212, 228, 238)], 18, crater_count=36)
+
+
+def selection_label_texture(text: str, font_path: str) -> Path:
+    safe_name = ''.join(ch if ch.isalnum() else '_' for ch in text) or 'label'
+    output_path = ASSET_DIR / f'selection_label_{safe_name}.png'
+
+    canvas_width = 320
+    canvas_height = 88
+    img = Image.new('RGBA', (canvas_width, canvas_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img, 'RGBA')
+    draw.rounded_rectangle((6, 10, canvas_width - 6, canvas_height - 10), radius=18, fill=(10, 16, 26, 170), outline=(96, 220, 255, 80), width=2)
+    try:
+        font = ImageFont.truetype(font_path.replace('/c/', 'C:/'), 40)
+    except OSError:
+        font = ImageFont.load_default()
+    text_bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = text_bbox[2] - text_bbox[0]
+    text_height = text_bbox[3] - text_bbox[1]
+    text_x = (canvas_width - text_width) // 2
+    text_y = (canvas_height - text_height) // 2 - 4
+    draw.text((text_x + 2, text_y + 2), text, font=font, fill=(0, 0, 0, 165))
+    draw.text((text_x, text_y), text, font=font, fill=(120, 235, 255, 255))
+    img.save(output_path)
+    return output_path
 
 def pick_texture(preferred_real: str, fallback_generated: str) -> str:
     real_path = ASSET_DIR / preferred_real
@@ -614,8 +664,9 @@ class OrbitalBody:
             model='sphere',
             texture=texture,
             scale=radius,
-            collider=None,
+            collider='sphere',
         )
+        self.body.orbital_body = self
         soften_texture_edges(self.body, repeat=True)
         self.orbit = None
         self.moons = []
@@ -753,7 +804,7 @@ def spawn_belt_asteroid(parent: Entity, inner_radius: float, outer_radius: float
 
 def build_scene():
     dark_space = color.black
-    ui_font = '/c/Windows/Fonts/simhei.ttf'
+    ui_font = '/c/Windows/Fonts/msyh.ttc'
     window.title = '太阳系 3D 模型'
     window.color = dark_space
     window.fps_counter.enabled = True
@@ -1000,10 +1051,10 @@ def build_scene():
     add_starfield()
 
     hotkey_text = Text(
-        text='0 全景 | 1 水星 | 2 金星 | 3 地球 | 4 火星 | 5 木星 | 6 土星 | 7 天王星 | 8 海王星 | 空格 轨道 | P 暂停',
+        text='0 全景 | 1 水星 | 2 金星 | 3 地球 | 4 火星 | 5 木星 | 6 土星 | 7 天王星 | 8 海王星 | WASD 移动/环绕 | 左键/右键/滚轮 | 空格 轨道 | P 暂停',
         x=-0.86,
         y=0.46,
-        scale=0.9,
+        scale=0.72,
         color=color.rgba(255, 255, 255, 185),
         font=ui_font,
     )
@@ -1011,15 +1062,15 @@ def build_scene():
         text='轨道：显示 [空格]',
         x=0.54,
         y=0.46,
-        scale=1.0,
+        scale=0.82,
         color=color.rgba(170, 255, 190, 235),
         font=ui_font,
     )
     target_status_text = Text(
         text='当前目标：全景',
-        x=0.54,
+        x=-0.86,
         y=0.40,
-        scale=1.0,
+        scale=0.8,
         color=color.rgba(130, 210, 255, 235),
         font=ui_font,
     )
@@ -1027,8 +1078,13 @@ def build_scene():
     editor_camera = EditorCamera(rotation_smoothing=2, rotate_key='right mouse', move_speed=60, pan_speed=(10, 10), zoom_speed=0, enabled=True)
     editor_camera.position = (0, 18, -150)
     editor_camera.look_at(sun.anchor.world_position)
-    editor_camera.target_z = -150
-    camera.z = -150
+    editor_camera.target_z = 0
+    camera.parent = editor_camera
+    camera.position = Vec3(0, 0, 0)
+    camera.rotation = Vec3(0, 0, 0)
+    held_key_state: Any = held_keys
+    wasd_move_speed = 38
+    earth_free_wasd_speed = 1.7
 
     simulation_speed = 1.45
     last_tick = pytime.perf_counter()
@@ -1050,10 +1106,26 @@ def build_scene():
     earth_free_rotate_sensitivity = 110
     orbits_visible = True
     paused = False
+    selected_body: OrbitalBody | None = None
+    selected_follow_offset = Vec3(0, 0, 0)
+    selected_follow_up = Vec3(0, 1, 0)
+    selected_transition_focus = Vec3(0, 0, 0)
+    selected_focus_offset = Vec3(0, 0, 0)
+    selected_follow_distance = 12.0
+    selected_follow_yaw = 0.0
+    selected_follow_pitch = 12.0
+    selected_follow_pan_sensitivity = 90.0
+    selected_follow_yaw_speed = 82.0
+    selected_follow_pitch_speed = 58.0
+    selection_label_position = Vec2(0.07, 0.03)
+    mouse_press_position = Vec2(0, 0)
+    click_candidate_active = False
+    click_drag_threshold = 0.018
     follow_focus_point = mercury.anchor.world_position
     follow_up_vector = mercury.orbit_plane.up.normalized()
     transition_timer = 0.0
     transition_duration = 0.9
+    selected_transition_duration = 1.05
 
     body_hotkeys = {
         '1': mercury,
@@ -1067,6 +1139,7 @@ def build_scene():
     }
     body_to_hotkey = {body.name: key for key, body in body_hotkeys.items()}
     body_display_names = {
+        'Sun': '太阳',
         'Mercury': '水星',
         'Venus': '金星',
         'Earth': '地球',
@@ -1075,7 +1148,107 @@ def build_scene():
         'Saturn': '土星',
         'Uranus': '天王星',
         'Neptune': '海王星',
+        'Moon': '月球',
+        'Phobos': '火卫一',
+        'Deimos': '火卫二',
+        'Io': '木卫一',
+        'Europa': '木卫二',
+        'Ganymede': '木卫三',
+        'Callisto': '木卫四',
+        'Titan': '土卫六',
+        'Rhea': '土卫五',
+        'Titania': '天卫三',
+        'Triton': '海卫一',
     }
+    selection_status_text = Text(
+        text='',
+        x=0,
+        y=0,
+        scale=0.62,
+        color=color.rgba(120, 235, 255, 240),
+        font=ui_font,
+        enabled=False,
+    )
+    selection_reticle = Entity(
+        parent=scene,
+        model='quad',
+        texture='assets/selection_bracket.png',
+        scale=1,
+        color=color.rgba(255, 255, 255, 255),
+        billboard=True,
+        double_sided=True,
+        unlit=True,
+        enabled=False,
+    )
+    selection_reticle.setTransparency(TransparencyAttrib.MAlpha)
+    selection_reticle.setDepthWrite(False)
+    selection_reticle.setBin('transparent', 25)
+    selection_reticle_inner_clear_ratio = 0.44
+
+    def refresh_selection_ui() -> None:
+        if selected_body is None:
+            selection_status_text.enabled = False
+            selection_reticle.enabled = False
+            selection_status_text.text = ''
+            return
+        selection_status_text.text = body_display_names.get(selected_body.name, selected_body.name)
+        selection_status_text.enabled = True
+        selection_reticle.parent = selected_body.anchor
+        selection_reticle.position = Vec3(0, 0, 0)
+        selection_reticle.scale = max(0.6, float(selected_body.body.scale_x) / selection_reticle_inner_clear_ratio)
+        selection_reticle.enabled = True
+
+    def attach_camera_to_overview_controls() -> None:
+        nonlocal camera_mode
+        world_position = Vec3(camera.world_position)
+        world_rotation = Vec3(camera.world_rotation)
+        editor_camera.position = world_position
+        editor_camera.rotation = world_rotation
+        editor_camera.enabled = True
+        camera.parent = editor_camera
+        camera.position = Vec3(0, 0, 0)
+        camera.rotation = Vec3(0, 0, 0)
+        editor_camera.target_z = 0
+        camera_mode = 'overview'
+
+    def clear_selection(*, stop_follow: bool) -> None:
+        nonlocal selected_body, selection_label_position, selected_focus_offset
+        selected_body = None
+        selected_focus_offset = Vec3(0, 0, 0)
+        selection_label_position = Vec2(0.07, 0.03)
+        refresh_selection_ui()
+        if stop_follow:
+            attach_camera_to_overview_controls()
+        refresh_target_ui()
+
+    def begin_selected_follow(new_body: OrbitalBody) -> None:
+        nonlocal camera_mode, target_body, selected_body, selected_follow_offset, selected_follow_up, selected_transition_focus, transition_timer
+        nonlocal selected_follow_distance, selected_follow_yaw, selected_follow_pitch, selected_focus_offset
+        world_position = Vec3(camera.world_position)
+        editor_camera.enabled = False
+        camera.parent = scene
+        camera.world_position = world_position
+        target_body = new_body
+        selected_body = new_body
+        selected_follow_offset = world_position - new_body.anchor.world_position
+        if selected_follow_offset.length() < 0.001:
+            selected_follow_offset = Vec3(0, 0, -max(4.0, float(new_body.body.scale_x) * 4.0))
+        selected_follow_distance = max(2.5, selected_follow_offset.length())
+        horizontal_length = math.sqrt(selected_follow_offset.x * selected_follow_offset.x + selected_follow_offset.z * selected_follow_offset.z)
+        selected_follow_yaw = math.degrees(math.atan2(selected_follow_offset.x, selected_follow_offset.z))
+        selected_follow_pitch = math.degrees(math.atan2(selected_follow_offset.y, max(0.001, horizontal_length)))
+        selected_focus_offset = Vec3(0, 0, 0)
+        selected_follow_up = camera_up_vector()
+        selected_transition_focus = camera_focus_point()
+        transition_timer = 0.0
+        camera_mode = 'transition_selected_follow'
+        camera.look_at(selected_transition_focus, up=selected_follow_up)
+        refresh_selection_ui()
+        refresh_target_ui()
+
+    def resolve_clicked_body() -> OrbitalBody | None:
+        hovered_entity = mouse.hovered_entity
+        return cast(OrbitalBody | None, getattr(hovered_entity, 'orbital_body', None)) if hovered_entity is not None else None
 
     def camera_focus_point(distance: float = 40.0) -> Vec3:
         return camera.world_position + camera.forward * distance
@@ -1084,6 +1257,18 @@ def build_scene():
         up = Vec3(camera.up)
         return up.normalized() if up.length() > 0.001 else Vec3(0, 1, 0)
 
+    def world_to_ui_point(world_position: Vec3) -> Vec3 | None:
+        if not application.base:
+            return None
+        relative_point = application.base.cam.getRelativePoint(
+            application.base.render,
+            Point3(world_position.x, world_position.y, world_position.z),
+        )
+        projected = Point2()
+        if relative_point.y <= 0 or not application.base.camLens.project(relative_point, projected):
+            return None
+        return Vec3(projected.x, projected.y, relative_point.y)
+
     def refresh_orbit_status_text() -> None:
         orbit_status_text.text = f'轨道：{"显示" if orbits_visible else "隐藏"} [空格]'
         orbit_status_text.color = color.rgba(170, 255, 190, 235) if orbits_visible else color.rgba(255, 170, 170, 235)
@@ -1091,8 +1276,12 @@ def build_scene():
     def refresh_target_ui() -> None:
         if camera_mode in ('overview', 'transition_overview'):
             selected_key = '0'
-            target_status_text.text = '当前目标：全景'
+            target_status_text.text = '当前目标：全景（WASD移动，左键平移，右键旋转，滚轮缩放）'
             target_status_text.color = color.rgba(130, 210, 255, 235)
+        elif camera_mode in ('selected_follow', 'transition_selected_follow') and selected_body is not None:
+            selected_key = body_to_hotkey.get(selected_body.name)
+            target_status_text.text = f'当前目标：{body_display_names.get(selected_body.name, selected_body.name)}（点选跟随：左键平移 右键旋转 滚轮缩放 WASD环绕）'
+            target_status_text.color = color.rgba(120, 235, 255, 240)
         else:
             selected_key = body_to_hotkey.get(target_body.name)
             suffix = '（自由）' if camera_mode == 'earth_free' else ''
@@ -1102,10 +1291,11 @@ def build_scene():
         hotkey_segments = []
         for key, label in [('0', '全景'), ('1', '水星'), ('2', '金星'), ('3', '地球'), ('4', '火星'), ('5', '木星'), ('6', '土星'), ('7', '天王星'), ('8', '海王星')]:
             hotkey_segments.append(f'[{key} {label}]' if key == selected_key else f'{key} {label}')
-        hotkey_text.text = ' | '.join(hotkey_segments) + ' | 空格 轨道 | P 暂停'
+        hotkey_text.text = ' | '.join(hotkey_segments) + ' | WASD 移动/环绕 | 左键/右键/滚轮 | 空格 轨道 | P 暂停'
 
     def begin_follow_transition(new_body: OrbitalBody) -> None:
         nonlocal camera_mode, target_body, follow_focus_point, follow_up_vector, transition_timer
+        clear_selection(stop_follow=False)
         world_position = Vec3(camera.world_position)
         focus_point = camera_focus_point()
         up_vector = camera_up_vector()
@@ -1122,6 +1312,7 @@ def build_scene():
 
     def begin_overview_transition() -> None:
         nonlocal camera_mode, follow_focus_point, follow_up_vector, transition_timer
+        clear_selection(stop_follow=False)
         world_position = Vec3(camera.world_position)
         focus_point = camera_focus_point()
         up_vector = camera_up_vector()
@@ -1136,12 +1327,27 @@ def build_scene():
         refresh_target_ui()
 
     refresh_orbit_status_text()
+    refresh_selection_ui()
     refresh_target_ui()
 
     def input(key):
         nonlocal camera_mode, target_body, orbits_visible, follow_focus_point, follow_up_vector, paused
+        nonlocal mouse_press_position, click_candidate_active
+        nonlocal selected_follow_distance
         cam_distance = max(4.0, (sun.anchor.world_position - camera.world_position).length() * 0.18)
-        if key == 'scroll up' and camera_mode == 'overview':
+        if key == 'left mouse down':
+            mouse_press_position = Vec2(mouse.position[0], mouse.position[1])
+            click_candidate_active = True
+        elif key == 'left mouse up':
+            current_mouse_position = Vec2(mouse.position[0], mouse.position[1])
+            if click_candidate_active and (current_mouse_position - mouse_press_position).length() <= click_drag_threshold:
+                clicked_body = resolve_clicked_body()
+                if clicked_body is not None:
+                    begin_selected_follow(clicked_body)
+                elif selected_body is not None:
+                    clear_selection(stop_follow=camera_mode in ('selected_follow', 'transition_selected_follow'))
+            click_candidate_active = False
+        elif key == 'scroll up' and camera_mode == 'overview':
             editor_camera.position += camera.forward * cam_distance
         elif key == 'scroll down' and camera_mode == 'overview':
             editor_camera.position -= camera.forward * cam_distance
@@ -1153,6 +1359,10 @@ def build_scene():
             refresh_target_ui()
         elif key == 'scroll down' and camera_mode == 'earth_free':
             camera.position -= camera.forward * 2.5
+        elif key == 'scroll up' and camera_mode in ('selected_follow', 'transition_selected_follow') and selected_body is not None:
+            selected_follow_distance = max(max(1.8, float(selected_body.body.scale_x) * 1.2), selected_follow_distance - max(0.8, selected_follow_distance * 0.12))
+        elif key == 'scroll down' and camera_mode in ('selected_follow', 'transition_selected_follow') and selected_body is not None:
+            selected_follow_distance += max(0.8, selected_follow_distance * 0.12)
         elif key in body_hotkeys:
             begin_follow_transition(body_hotkeys[key])
         elif key == '0':
@@ -1168,144 +1378,201 @@ def build_scene():
     globals()['input'] = input
 
     def update():
-        nonlocal last_tick, camera_mode, follow_focus_point, follow_up_vector, transition_timer
+        nonlocal last_tick, camera_mode, follow_focus_point, follow_up_vector, transition_timer, selected_transition_focus
+        nonlocal selection_label_position
+        nonlocal selected_follow_distance, selected_follow_yaw, selected_follow_pitch, selected_focus_offset
         now = pytime.perf_counter()
         dt = min(now - last_tick, 0.05)
         last_tick = now
 
+        if camera_mode == 'overview':
+            if held_key_state.get('w', False):
+                camera.world_position += camera.forward * wasd_move_speed * dt
+            if held_key_state.get('s', False):
+                camera.world_position -= camera.forward * wasd_move_speed * dt
+            if held_key_state.get('a', False):
+                camera.world_position -= camera.right * wasd_move_speed * dt
+            if held_key_state.get('d', False):
+                camera.world_position += camera.right * wasd_move_speed * dt
+            editor_camera.position = camera.world_position
+        elif camera_mode == 'earth_free':
+            if held_key_state.get('w', False):
+                camera.position += camera.forward * earth_free_wasd_speed
+            if held_key_state.get('s', False):
+                camera.position -= camera.forward * earth_free_wasd_speed
+            if held_key_state.get('a', False):
+                camera.position -= camera.right * earth_free_wasd_speed
+            if held_key_state.get('d', False):
+                camera.position += camera.right * earth_free_wasd_speed
+        elif camera_mode in ('selected_follow', 'transition_selected_follow') and selected_body is not None:
+            if held_key_state.get('a', False):
+                selected_follow_yaw -= selected_follow_yaw_speed * dt
+            if held_key_state.get('d', False):
+                selected_follow_yaw += selected_follow_yaw_speed * dt
+            if held_key_state.get('w', False):
+                selected_follow_pitch = min(80, selected_follow_pitch + selected_follow_pitch_speed * dt)
+            if held_key_state.get('s', False):
+                selected_follow_pitch = max(-80, selected_follow_pitch - selected_follow_pitch_speed * dt)
+
         if mouse.left and camera_mode == 'overview':
             zoom_compensation = max(0.35, abs(editor_camera.target_z) * 0.08)
-            editor_camera.position -= camera.right * mouse.velocity[0] * pan_sensitivity * dt * zoom_compensation
-            editor_camera.position -= camera.up * mouse.velocity[1] * pan_sensitivity * dt * zoom_compensation
+            camera.world_position -= camera.right * mouse.velocity[0] * pan_sensitivity * dt * zoom_compensation
+            camera.world_position -= camera.up * mouse.velocity[1] * pan_sensitivity * dt * zoom_compensation
+            editor_camera.position = camera.world_position
         elif mouse.left and camera_mode == 'earth_free':
             camera.position -= camera.right * mouse.velocity[0] * earth_free_pan_sensitivity
             camera.position -= camera.up * mouse.velocity[1] * earth_free_pan_sensitivity
+        elif mouse.left and camera_mode in ('selected_follow', 'transition_selected_follow') and selected_body is not None:
+            pan_scale = max(0.01, selected_follow_distance * 0.018)
+            selected_focus_offset -= camera.right * mouse.velocity[0] * selected_follow_pan_sensitivity * dt * pan_scale
+            selected_focus_offset -= camera.up * mouse.velocity[1] * selected_follow_pan_sensitivity * dt * pan_scale
+        elif mouse.right and camera_mode in ('selected_follow', 'transition_selected_follow') and selected_body is not None:
+            selected_follow_yaw += mouse.velocity[0] * 240 * dt
+            selected_follow_pitch = max(-80, min(80, selected_follow_pitch - mouse.velocity[1] * 180 * dt))
 
         if mouse.right and camera_mode == 'earth_free':
             camera.rotation_x -= mouse.velocity[1] * earth_free_rotate_sensitivity
             camera.rotation_y += mouse.velocity[0] * earth_free_rotate_sensitivity
 
-        if paused:
-            return
-
         t = pytime.time()
-        current_sun_radius = float(sun.body.scale_x)
-        flame_surface_radius = current_sun_radius * 0.5
-        sun_shell_1.rotation_y += dt * 18
-        sun_shell_1.texture_offset = Vec2(t * 0.015, t * 0.01)
-        sun_shell_1.scale = current_sun_radius * (1.045 + math.sin(t * 3.9) * 0.018 + math.sin(t * 9.5) * 0.008)
-        sun_shell_1.color = color.rgba(
-            int(248 + math.sin(t * 2.1) * 7),
-            int(132 + math.sin(t * 3.3 + 0.6) * 20),
-            int(36 + math.sin(t * 5.1) * 14),
-            int(34 + math.sin(t * 4.2) * 8),
-        )
-
-        sun_shell_2.rotation_y -= dt * 13
-        sun_shell_2.texture_offset = Vec2(-t * 0.01, t * 0.013)
-        sun_shell_2.scale = current_sun_radius * (1.112 + math.sin(t * 2.8 + 1.5) * 0.027 + math.sin(t * 7.3) * 0.012)
-        sun_shell_2.color = color.rgba(
-            int(255),
-            int(82 + math.sin(t * 2.5 + 0.8) * 16),
-            int(12 + math.sin(t * 4.7 + 1.3) * 8),
-            int(18 + math.sin(t * 3.7) * 7),
-        )
-        sun_shell_3.rotation_y += dt * 28
-        sun_shell_3.rotation_x += dt * 11
-        sun_shell_3.texture_offset = Vec2(t * 0.028, -t * 0.019)
-        sun_shell_3.scale = current_sun_radius * (1.198 + math.sin(t * 6.2) * 0.038 + math.sin(t * 13.5 + 0.8) * 0.017)
-        sun_shell_3.color = color.rgba(
-            255,
-            int(64 + math.sin(t * 5.4) * 20),
-            int(0 + max(0, math.sin(t * 8.1)) * 10),
-            int(18 + math.sin(t * 6.7 + 0.9) * 8),
-        )
-        for ring_index, flame_root in enumerate(flame_roots):
-            flame_root.rotation_z += dt * (7 + ring_index * 1.6)
-            flame_root.rotation_y += dt * (3.5 if ring_index % 2 == 0 else -3.5)
-
-        for tongue, ring_index, index in flame_tongues:
-            phase = t * (2.6 + index * 0.13) + index * 0.8
-            angle = math.tau * (index / flame_count)
-            radial = flame_surface_radius * (0.89 + ring_index * 0.01) + math.sin(phase * 1.8) * current_sun_radius * 0.016
-            tongue.rotation_y = index * (360 / flame_count) + math.sin(phase) * 14
-            tongue.rotation_z = index * (360 / flame_count) + math.sin(phase * 1.2) * 18
-            tongue.rotation_x = 90 + math.sin(phase * 0.7) * 11
-            tongue.position = Vec3(math.cos(angle) * radial, math.sin(angle) * radial, math.sin(phase * 1.5) * current_sun_radius * (0.024 + ring_index * 0.004))
-            tongue.scale = Vec2(
-                current_sun_radius * (0.08 + math.sin(phase * 1.7) * 0.014),
-                current_sun_radius * (0.36 + math.sin(phase * 2.4) * 0.092 + ring_index * 0.024),
+        if not paused:
+            current_sun_radius = float(sun.body.scale_x)
+            flame_surface_radius = current_sun_radius * 0.5
+            sun_shell_1.rotation_y += dt * 18
+            sun_shell_1.texture_offset = Vec2(t * 0.015, t * 0.01)
+            sun_shell_1.scale = current_sun_radius * (1.045 + math.sin(t * 3.9) * 0.018 + math.sin(t * 9.5) * 0.008)
+            sun_shell_1.color = color.rgba(
+                int(248 + math.sin(t * 2.1) * 7),
+                int(132 + math.sin(t * 3.3 + 0.6) * 20),
+                int(36 + math.sin(t * 5.1) * 14),
+                int(34 + math.sin(t * 4.2) * 8),
             )
-            tongue.color = color.rgba(
+
+            sun_shell_2.rotation_y -= dt * 13
+            sun_shell_2.texture_offset = Vec2(-t * 0.01, t * 0.013)
+            sun_shell_2.scale = current_sun_radius * (1.112 + math.sin(t * 2.8 + 1.5) * 0.027 + math.sin(t * 7.3) * 0.012)
+            sun_shell_2.color = color.rgba(
+                int(255),
+                int(82 + math.sin(t * 2.5 + 0.8) * 16),
+                int(12 + math.sin(t * 4.7 + 1.3) * 8),
+                int(18 + math.sin(t * 3.7) * 7),
+            )
+            sun_shell_3.rotation_y += dt * 28
+            sun_shell_3.rotation_x += dt * 11
+            sun_shell_3.texture_offset = Vec2(t * 0.028, -t * 0.019)
+            sun_shell_3.scale = current_sun_radius * (1.198 + math.sin(t * 6.2) * 0.038 + math.sin(t * 13.5 + 0.8) * 0.017)
+            sun_shell_3.color = color.rgba(
                 255,
-                int(140 + math.sin(phase * 1.5) * 28),
-                int(24 + max(0, math.sin(phase * 2.2)) * 20),
-                int(28 + math.sin(phase * 2.0 + 0.4) * 12 + ring_index * 2),
+                int(64 + math.sin(t * 5.4) * 20),
+                int(0 + max(0, math.sin(t * 8.1)) * 10),
+                int(18 + math.sin(t * 6.7 + 0.9) * 8),
             )
-        earth_clouds.rotation_y += dt * 6.5
-        earth_night.rotation_y += dt * 0.8
-        current_saturn_radius = float(saturn.body.scale_x)
-        saturn_ring_back_entity.scale = current_saturn_radius * 2.32
-        saturn_ring_entity.scale = current_saturn_radius * 2.32
-        saturn_ring_back_entity.rotation_z = 0
-        saturn_ring_entity.rotation_z = 0
+            for ring_index, flame_root in enumerate(flame_roots):
+                flame_root.rotation_z += dt * (7 + ring_index * 1.6)
+                flame_root.rotation_y += dt * (3.5 if ring_index % 2 == 0 else -3.5)
+
+            for tongue, ring_index, index in flame_tongues:
+                phase = t * (2.6 + index * 0.13) + index * 0.8
+                angle = math.tau * (index / flame_count)
+                radial = flame_surface_radius * (0.89 + ring_index * 0.01) + math.sin(phase * 1.8) * current_sun_radius * 0.016
+                tongue.rotation_y = index * (360 / flame_count) + math.sin(phase) * 14
+                tongue.rotation_z = index * (360 / flame_count) + math.sin(phase * 1.2) * 18
+                tongue.rotation_x = 90 + math.sin(phase * 0.7) * 11
+                tongue.position = Vec3(math.cos(angle) * radial, math.sin(angle) * radial, math.sin(phase * 1.5) * current_sun_radius * (0.024 + ring_index * 0.004))
+                tongue.scale = Vec2(
+                    current_sun_radius * (0.08 + math.sin(phase * 1.7) * 0.014),
+                    current_sun_radius * (0.36 + math.sin(phase * 2.4) * 0.092 + ring_index * 0.024),
+                )
+                tongue.color = color.rgba(
+                    255,
+                    int(140 + math.sin(phase * 1.5) * 28),
+                    int(24 + max(0, math.sin(phase * 2.2)) * 20),
+                    int(28 + math.sin(phase * 2.0 + 0.4) * 12 + ring_index * 2),
+                )
+            earth_clouds.rotation_y += dt * 6.5
+            earth_night.rotation_y += dt * 0.8
+            current_saturn_radius = float(saturn.body.scale_x)
+            saturn_ring_back_entity.scale = current_saturn_radius * 2.32
+            saturn_ring_entity.scale = current_saturn_radius * 2.32
+            saturn_ring_back_entity.rotation_z = 0
+            saturn_ring_entity.rotation_z = 0
+
+            for belt_info in asteroid_belt:
+                belt_entity = belt_info['entity']
+                belt_info['orbit_angle'] = (belt_info['orbit_angle'] + belt_info['orbit_speed'] * dt * simulation_speed) % math.tau
+                orbit_angle = belt_info['orbit_angle']
+                orbit_radius = belt_info['orbit_radius']
+                belt_entity.position = Vec3(math.cos(orbit_angle) * orbit_radius, belt_info['vertical_offset'], math.sin(orbit_angle) * orbit_radius)
+                spin = belt_info['spin']
+                belt_entity.rotation_x += spin.x * dt
+                belt_entity.rotation_y += spin.y * dt
+                belt_entity.rotation_z += spin.z * dt
+
+            for asteroid_info in asteroid_field:
+                asteroid_entity = asteroid_info['entity']
+                asteroid_tail = asteroid_info['tail']
+                velocity = asteroid_info['velocity']
+                spin = asteroid_info['spin']
+                base_scale = asteroid_info['base_scale']
+                fast_pass = asteroid_info['fast_pass']
+                asteroid_entity.position += velocity * dt
+                asteroid_entity.rotation_x += spin.x * dt
+                asteroid_entity.rotation_y += spin.y * dt
+                asteroid_entity.rotation_z += spin.z * dt
+                asteroid_entity.look_at(asteroid_entity.position + velocity.normalized(), up=Vec3(0, 1, 0))
+                distance_to_sun = max(0.001, asteroid_entity.position.length())
+                solar_heat = max(0.0, min(1.0, 1.0 - distance_to_sun / asteroid_spawn_radius))
+                tail_heat = solar_heat * solar_heat
+                tail_length = base_scale * ((14.0 if fast_pass else 11.0) + tail_heat * (34.0 if fast_pass else 22.0) + math.sin(t * 6.0 + base_scale * 10.0) * 1.8)
+                tail_width = base_scale * (1.9 + tail_heat * 2.2)
+                asteroid_tail.position = Vec3(0, 0, -base_scale * 0.52)
+                asteroid_tail.rotation = Vec3(90, 0, 0)
+                asteroid_tail.scale = Vec2(tail_width, tail_length)
+                asteroid_tail.color = color.rgba(
+                    255,
+                    255,
+                    255,
+                    int(92 + tail_heat * 120),
+                )
+                asteroid_entity.color = color.rgba(
+                    int(140 + tail_heat * 95),
+                    int(126 + tail_heat * 22),
+                    int(110 + tail_heat * 10),
+                    210,
+                )
+                if asteroid_entity.position.length() < sun.body.scale_x * 0.7 or asteroid_entity.position.length() > asteroid_spawn_radius * 1.12:
+                    asteroid_entity.disable()
+                    replacement = spawn_asteroid(scene, asteroid_spawn_radius)
+                    asteroid_info['entity'] = replacement['entity']
+                    asteroid_info['tail'] = replacement['tail']
+                    asteroid_info['velocity'] = replacement['velocity']
+                    asteroid_info['spin'] = replacement['spin']
+                    asteroid_info['base_scale'] = replacement['base_scale']
+                    asteroid_info['fast_pass'] = replacement['fast_pass']
+
+            for body in planets:
+                body.update(dt, simulation_speed)
+
         space_panorama.position = camera.world_position
 
-        for belt_info in asteroid_belt:
-            belt_entity = belt_info['entity']
-            belt_info['orbit_angle'] = (belt_info['orbit_angle'] + belt_info['orbit_speed'] * dt * simulation_speed) % math.tau
-            orbit_angle = belt_info['orbit_angle']
-            orbit_radius = belt_info['orbit_radius']
-            belt_entity.position = Vec3(math.cos(orbit_angle) * orbit_radius, belt_info['vertical_offset'], math.sin(orbit_angle) * orbit_radius)
-            spin = belt_info['spin']
-            belt_entity.rotation_x += spin.x * dt
-            belt_entity.rotation_y += spin.y * dt
-            belt_entity.rotation_z += spin.z * dt
+        if selected_body is not None:
+            body_center_world = Vec3(selected_body.body.world_position)
+            body_radius_world = max(0.08, float(selected_body.body.scale_x) * 0.5)
+            center_point = world_to_ui_point(body_center_world)
 
-        for asteroid_info in asteroid_field:
-            asteroid_entity = asteroid_info['entity']
-            asteroid_tail = asteroid_info['tail']
-            velocity = asteroid_info['velocity']
-            spin = asteroid_info['spin']
-            base_scale = asteroid_info['base_scale']
-            fast_pass = asteroid_info['fast_pass']
-            asteroid_entity.position += velocity * dt
-            asteroid_entity.rotation_x += spin.x * dt
-            asteroid_entity.rotation_y += spin.y * dt
-            asteroid_entity.rotation_z += spin.z * dt
-            asteroid_entity.look_at(asteroid_entity.position + velocity.normalized(), up=Vec3(0, 1, 0))
-            distance_to_sun = max(0.001, asteroid_entity.position.length())
-            solar_heat = max(0.0, min(1.0, 1.0 - distance_to_sun / asteroid_spawn_radius))
-            tail_heat = solar_heat * solar_heat
-            tail_length = base_scale * ((14.0 if fast_pass else 11.0) + tail_heat * (34.0 if fast_pass else 22.0) + math.sin(t * 6.0 + base_scale * 10.0) * 1.8)
-            tail_width = base_scale * (1.9 + tail_heat * 2.2)
-            asteroid_tail.position = Vec3(0, 0, -base_scale * 0.52)
-            asteroid_tail.rotation = Vec3(90, 0, 0)
-            asteroid_tail.scale = Vec2(tail_width, tail_length)
-            asteroid_tail.color = color.rgba(
-                255,
-                255,
-                255,
-                int(92 + tail_heat * 120),
-            )
-            asteroid_entity.color = color.rgba(
-                int(140 + tail_heat * 95),
-                int(126 + tail_heat * 22),
-                int(110 + tail_heat * 10),
-                210,
-            )
-            if asteroid_entity.position.length() < sun.body.scale_x * 0.7 or asteroid_entity.position.length() > asteroid_spawn_radius * 1.12:
-                asteroid_entity.disable()
-                replacement = spawn_asteroid(scene, asteroid_spawn_radius)
-                asteroid_info['entity'] = replacement['entity']
-                asteroid_info['tail'] = replacement['tail']
-                asteroid_info['velocity'] = replacement['velocity']
-                asteroid_info['spin'] = replacement['spin']
-                asteroid_info['base_scale'] = replacement['base_scale']
-                asteroid_info['fast_pass'] = replacement['fast_pass']
-
-        for body in planets:
-            body.update(dt, simulation_speed)
+            if center_point is not None:
+                selection_label_position = Vec2(
+                    min(0.82, center_point.x + 0.045),
+                    min(0.47, center_point.y + 0.02),
+                )
+            pulse = 1.0 + math.sin(t * 2.4) * 0.035
+            selection_reticle.parent = selected_body.anchor
+            selection_reticle.position = Vec3(0, 0, 0)
+            selection_reticle.scale = max(0.6, (float(selected_body.body.scale_x) / selection_reticle_inner_clear_ratio) * pulse)
+            selection_reticle.color = color.rgba(255, 255, 255, int(220 + math.sin(t * 2.4) * 20))
+            selection_status_text.enabled = True
+            selection_status_text.x = selection_label_position.x
+            selection_status_text.y = selection_label_position.y
 
         if camera_mode in ('earth_follow', 'transition_follow'):
             anti_sun_direction = (target_body.anchor.world_position - sun.anchor.world_position).normalized()
@@ -1342,6 +1609,42 @@ def build_scene():
                 if transition_timer >= transition_duration:
                     camera_mode = 'earth_follow'
                     refresh_target_ui()
+        elif camera_mode == 'transition_selected_follow' and selected_body is not None:
+            desired_focus = selected_body.anchor.world_position + selected_focus_offset
+            yaw_radians = math.radians(selected_follow_yaw)
+            pitch_radians = math.radians(selected_follow_pitch)
+            orbit_offset = Vec3(
+                math.sin(yaw_radians) * math.cos(pitch_radians),
+                math.sin(pitch_radians),
+                math.cos(yaw_radians) * math.cos(pitch_radians),
+            ) * selected_follow_distance
+            desired_position = desired_focus + orbit_offset
+            selected_transition_focus = Vec3(
+                lerp(selected_transition_focus.x, desired_focus.x, dt * 1.65),
+                lerp(selected_transition_focus.y, desired_focus.y, dt * 1.65),
+                lerp(selected_transition_focus.z, desired_focus.z, dt * 1.65),
+            )
+            camera.world_position = Vec3(
+                lerp(camera.world_position.x, desired_position.x, dt * 1.55),
+                lerp(camera.world_position.y, desired_position.y, dt * 1.55),
+                lerp(camera.world_position.z, desired_position.z, dt * 1.55),
+            )
+            camera.look_at(selected_transition_focus, up=selected_follow_up)
+            transition_timer += dt
+            if transition_timer >= selected_transition_duration:
+                camera_mode = 'selected_follow'
+                refresh_target_ui()
+        elif camera_mode == 'selected_follow' and selected_body is not None:
+            desired_focus = selected_body.anchor.world_position + selected_focus_offset
+            yaw_radians = math.radians(selected_follow_yaw)
+            pitch_radians = math.radians(selected_follow_pitch)
+            orbit_offset = Vec3(
+                math.sin(yaw_radians) * math.cos(pitch_radians),
+                math.sin(pitch_radians),
+                math.cos(yaw_radians) * math.cos(pitch_radians),
+            ) * selected_follow_distance
+            camera.world_position = desired_focus + orbit_offset
+            camera.look_at(desired_focus, up=selected_follow_up)
         elif camera_mode == 'transition_overview':
             overview_focus = sun.anchor.world_position
             overview_up = Vec3(0, 1, 0)
