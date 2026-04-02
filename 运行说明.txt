@@ -1,0 +1,8 @@
+Windows 可直接运行的程序在：
+
+dist\SolarSystem3D\SolarSystem3D.exe
+
+注意：
+- 不要运行 build 目录里的 SolarSystem3D.exe，那是 PyInstaller 的中间产物，不是最终可执行发布文件。
+- 正确运行时，需要保留 dist\SolarSystem3D\ 下的 _internal 和 assets 目录。
+- 如果要发给别人，请整个 dist\SolarSystem3D 文件夹一起打包发送。
