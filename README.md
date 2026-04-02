@@ -9,6 +9,8 @@
 
 ![太阳系模拟演示系统截图](docs/screenshot.png)
 
+![太阳系模拟演示系统截图2](docs/screenshot2.png)
+
 ## 功能特性
 
 - 太阳、八大行星与主要卫星的 3D 可视化演示
