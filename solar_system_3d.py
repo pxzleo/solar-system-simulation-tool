@@ -671,6 +671,86 @@ def add_space_panorama() -> Entity:
     return panorama
 
 
+def spawn_asteroid(parent: Entity, spawn_radius: float) -> dict[str, Any]:
+    entry_direction = Vec3(RNG.uniform(-1.0, 1.0), RNG.uniform(-0.65, 0.65), RNG.uniform(-1.0, 1.0)).normalized()
+    tangential = Vec3(-entry_direction.z, RNG.uniform(-0.42, 0.42), entry_direction.x)
+    if tangential.length() < 0.001:
+        tangential = Vec3(0.0, 0.24, 1.0)
+    tangential = tangential.normalized()
+    start_position = entry_direction * spawn_radius + tangential * RNG.uniform(-10.0, 10.0)
+    target_position = Vec3(RNG.uniform(-18.0, 18.0), RNG.uniform(-6.0, 6.0), RNG.uniform(-18.0, 18.0))
+    fly_direction = (target_position - start_position).normalized()
+    base_scale = RNG.uniform(0.14, 0.34)
+    fast_pass = RNG.random() < 0.24
+    speed = RNG.uniform(10.0, 17.0) if fast_pass else RNG.uniform(5.5, 11.5)
+    asteroid = Entity(
+        parent=parent,
+        model='sphere',
+        texture='assets/phobos.png',
+        scale=(base_scale * RNG.uniform(1.5, 2.4), base_scale * RNG.uniform(0.7, 1.1), base_scale * RNG.uniform(0.75, 1.2)),
+        position=start_position,
+        rotation=(RNG.uniform(0, 360), RNG.uniform(0, 360), RNG.uniform(0, 360)),
+        color=color.rgba(140, 126, 110, RNG.randint(160, 220)),
+    )
+    soften_texture_edges(asteroid, repeat=True)
+    tail = Entity(
+        parent=asteroid,
+        model='quad',
+        texture='assets/sun_glow.png',
+        scale=(base_scale * 2.8, base_scale * RNG.uniform(18.0, 26.0)),
+        origin=(0, 0.5),
+        position=(0, 0, -base_scale * 0.55),
+        rotation_x=90,
+        color=color.rgba(255, 255, 255, RNG.randint(92, 128)),
+        double_sided=True,
+    )
+    soften_texture_edges(tail, repeat=False, transparent_border=True)
+    tail.setTransparency(TransparencyAttrib.MAlpha)
+    tail.setDepthWrite(False)
+    tail.setBin('transparent', 2)
+    return {
+        'entity': asteroid,
+        'tail': tail,
+        'velocity': fly_direction * speed,
+        'spin': Vec3(RNG.uniform(-110, 110), RNG.uniform(-130, 130), RNG.uniform(-90, 90)),
+        'base_scale': base_scale,
+        'fast_pass': fast_pass,
+    }
+
+
+def spawn_belt_asteroid(parent: Entity, inner_radius: float, outer_radius: float) -> dict[str, Any]:
+    while True:
+        orbit_t = RNG.random()
+        weighted_t = orbit_t ** 0.78
+        orbit_radius = inner_radius + (outer_radius - inner_radius) * weighted_t
+        outer_gap_threshold = inner_radius + (outer_radius - inner_radius) * 0.82
+        if orbit_radius > outer_gap_threshold and RNG.random() < 0.68:
+            continue
+        break
+    orbit_angle = RNG.uniform(0.0, math.tau)
+    belt_thickness = 2.2 + (orbit_radius - inner_radius) / max(1.0, outer_radius - inner_radius) * 0.9
+    vertical_offset = RNG.uniform(-belt_thickness, belt_thickness)
+    base_scale = RNG.uniform(0.04, 0.11) * 5.0 * 0.7
+    asteroid = Entity(
+        parent=parent,
+        model='sphere',
+        texture='assets/phobos.png',
+        scale=(base_scale * RNG.uniform(1.4, 2.3), base_scale * RNG.uniform(0.65, 1.1), base_scale * RNG.uniform(0.75, 1.35)),
+        position=(math.cos(orbit_angle) * orbit_radius, vertical_offset, math.sin(orbit_angle) * orbit_radius),
+        rotation=(RNG.uniform(0, 360), RNG.uniform(0, 360), RNG.uniform(0, 360)),
+        color=color.rgba(RNG.randint(108, 150), RNG.randint(96, 132), RNG.randint(86, 116), RNG.randint(145, 210)),
+    )
+    soften_texture_edges(asteroid, repeat=True)
+    return {
+        'entity': asteroid,
+        'orbit_radius': orbit_radius,
+        'orbit_angle': orbit_angle,
+        'vertical_offset': vertical_offset,
+        'orbit_speed': RNG.uniform(0.5, 1.2) / max(orbit_radius, 1.0),
+        'spin': Vec3(RNG.uniform(-90, 90), RNG.uniform(-120, 120), RNG.uniform(-70, 70)),
+    }
+
+
 def build_scene():
     dark_space = color.black
     ui_font = '/c/Windows/Fonts/simhei.ttf'
@@ -853,6 +933,14 @@ def build_scene():
     saturn_ring_entity.setBin('transparent', 1)
     saturn_ring_entity.setAttrib(AlphaTestAttrib.make(AlphaTestAttrib.MGreaterEqual, 0.25))
 
+    belt_inner_radius = mars.distance + (jupiter.distance - mars.distance) * 0.16
+    belt_outer_radius = mars.distance + (jupiter.distance - mars.distance) * 0.66
+    asteroid_belt_parent = Entity(parent=scene, rotation_x=RNG.uniform(-2.5, 2.5), rotation_z=RNG.uniform(-2.0, 2.0))
+    asteroid_belt: list[dict[str, Any]] = [spawn_belt_asteroid(asteroid_belt_parent, belt_inner_radius, belt_outer_radius) for _ in range(320)]
+
+    asteroid_spawn_radius = max(neptune.distance * 1.22, 120.0)
+    asteroid_field: list[dict[str, Any]] = [spawn_asteroid(scene, asteroid_spawn_radius) for _ in range(7)]
+
     def add_scaled_moon(parent_body: OrbitalBody, moon_name: str, parent_transform, orbit_speed_sign: float = 1.0) -> OrbitalBody:
         moon_data = MOON_DATA[moon_name]
         moon_real = MOON_REAL[moon_name]
@@ -912,7 +1000,7 @@ def build_scene():
     add_starfield()
 
     hotkey_text = Text(
-        text='0 全景 | 1 水星 | 2 金星 | 3 地球 | 4 火星 | 5 木星 | 6 土星 | 7 天王星 | 8 海王星 | 空格 轨道',
+        text='0 全景 | 1 水星 | 2 金星 | 3 地球 | 4 火星 | 5 木星 | 6 土星 | 7 天王星 | 8 海王星 | 空格 轨道 | P 暂停',
         x=-0.86,
         y=0.46,
         scale=0.9,
@@ -961,6 +1049,7 @@ def build_scene():
     earth_free_pan_sensitivity = 28
     earth_free_rotate_sensitivity = 110
     orbits_visible = True
+    paused = False
     follow_focus_point = mercury.anchor.world_position
     follow_up_vector = mercury.orbit_plane.up.normalized()
     transition_timer = 0.0
@@ -1013,7 +1102,7 @@ def build_scene():
         hotkey_segments = []
         for key, label in [('0', '全景'), ('1', '水星'), ('2', '金星'), ('3', '地球'), ('4', '火星'), ('5', '木星'), ('6', '土星'), ('7', '天王星'), ('8', '海王星')]:
             hotkey_segments.append(f'[{key} {label}]' if key == selected_key else f'{key} {label}')
-        hotkey_text.text = ' | '.join(hotkey_segments) + ' | 空格 轨道'
+        hotkey_text.text = ' | '.join(hotkey_segments) + ' | 空格 轨道 | P 暂停'
 
     def begin_follow_transition(new_body: OrbitalBody) -> None:
         nonlocal camera_mode, target_body, follow_focus_point, follow_up_vector, transition_timer
@@ -1050,7 +1139,7 @@ def build_scene():
     refresh_target_ui()
 
     def input(key):
-        nonlocal camera_mode, target_body, orbits_visible, follow_focus_point, follow_up_vector
+        nonlocal camera_mode, target_body, orbits_visible, follow_focus_point, follow_up_vector, paused
         cam_distance = max(4.0, (sun.anchor.world_position - camera.world_position).length() * 0.18)
         if key == 'scroll up' and camera_mode == 'overview':
             editor_camera.position += camera.forward * cam_distance
@@ -1073,6 +1162,8 @@ def build_scene():
             for body in planets:
                 set_orbit_visibility(body, orbits_visible)
             refresh_orbit_status_text()
+        elif key == 'p':
+            paused = not paused
 
     globals()['input'] = input
 
@@ -1093,6 +1184,9 @@ def build_scene():
         if mouse.right and camera_mode == 'earth_free':
             camera.rotation_x -= mouse.velocity[1] * earth_free_rotate_sensitivity
             camera.rotation_y += mouse.velocity[0] * earth_free_rotate_sensitivity
+
+        if paused:
+            return
 
         t = pytime.time()
         current_sun_radius = float(sun.body.scale_x)
@@ -1156,6 +1250,59 @@ def build_scene():
         saturn_ring_back_entity.rotation_z = 0
         saturn_ring_entity.rotation_z = 0
         space_panorama.position = camera.world_position
+
+        for belt_info in asteroid_belt:
+            belt_entity = belt_info['entity']
+            belt_info['orbit_angle'] = (belt_info['orbit_angle'] + belt_info['orbit_speed'] * dt * simulation_speed) % math.tau
+            orbit_angle = belt_info['orbit_angle']
+            orbit_radius = belt_info['orbit_radius']
+            belt_entity.position = Vec3(math.cos(orbit_angle) * orbit_radius, belt_info['vertical_offset'], math.sin(orbit_angle) * orbit_radius)
+            spin = belt_info['spin']
+            belt_entity.rotation_x += spin.x * dt
+            belt_entity.rotation_y += spin.y * dt
+            belt_entity.rotation_z += spin.z * dt
+
+        for asteroid_info in asteroid_field:
+            asteroid_entity = asteroid_info['entity']
+            asteroid_tail = asteroid_info['tail']
+            velocity = asteroid_info['velocity']
+            spin = asteroid_info['spin']
+            base_scale = asteroid_info['base_scale']
+            fast_pass = asteroid_info['fast_pass']
+            asteroid_entity.position += velocity * dt
+            asteroid_entity.rotation_x += spin.x * dt
+            asteroid_entity.rotation_y += spin.y * dt
+            asteroid_entity.rotation_z += spin.z * dt
+            asteroid_entity.look_at(asteroid_entity.position + velocity.normalized(), up=Vec3(0, 1, 0))
+            distance_to_sun = max(0.001, asteroid_entity.position.length())
+            solar_heat = max(0.0, min(1.0, 1.0 - distance_to_sun / asteroid_spawn_radius))
+            tail_heat = solar_heat * solar_heat
+            tail_length = base_scale * ((14.0 if fast_pass else 11.0) + tail_heat * (34.0 if fast_pass else 22.0) + math.sin(t * 6.0 + base_scale * 10.0) * 1.8)
+            tail_width = base_scale * (1.9 + tail_heat * 2.2)
+            asteroid_tail.position = Vec3(0, 0, -base_scale * 0.52)
+            asteroid_tail.rotation = Vec3(90, 0, 0)
+            asteroid_tail.scale = Vec2(tail_width, tail_length)
+            asteroid_tail.color = color.rgba(
+                255,
+                255,
+                255,
+                int(92 + tail_heat * 120),
+            )
+            asteroid_entity.color = color.rgba(
+                int(140 + tail_heat * 95),
+                int(126 + tail_heat * 22),
+                int(110 + tail_heat * 10),
+                210,
+            )
+            if asteroid_entity.position.length() < sun.body.scale_x * 0.7 or asteroid_entity.position.length() > asteroid_spawn_radius * 1.12:
+                asteroid_entity.disable()
+                replacement = spawn_asteroid(scene, asteroid_spawn_radius)
+                asteroid_info['entity'] = replacement['entity']
+                asteroid_info['tail'] = replacement['tail']
+                asteroid_info['velocity'] = replacement['velocity']
+                asteroid_info['spin'] = replacement['spin']
+                asteroid_info['base_scale'] = replacement['base_scale']
+                asteroid_info['fast_pass'] = replacement['fast_pass']
 
         for body in planets:
             body.update(dt, simulation_speed)
