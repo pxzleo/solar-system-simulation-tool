@@ -1,0 +1,1211 @@
+from __future__ import annotations
+
+import argparse
+import math
+import random
+import time as pytime
+from pathlib import Path
+from typing import Any, Callable, Sequence, cast
+
+from PIL import Image, ImageDraw, ImageFilter
+from ursina import AmbientLight, EditorCamera, Entity, Mesh, PointLight, Text, Ursina, Vec2, Vec3, application, camera, color, invoke, lerp, mouse, scene, window
+
+
+ROOT = Path(__file__).resolve().parent
+ASSET_DIR = ROOT / 'assets'
+RNG = random.Random(20260401)
+
+
+def clamp_channel(value: float, low: int = 0, high: int = 255) -> int:
+    return max(low, min(high, int(value)))
+
+
+def mix(c1: Sequence[int], c2: Sequence[int], t: float) -> tuple[int, int, int]:
+    return (
+        clamp_channel(c1[0] + (c2[0] - c1[0]) * t),
+        clamp_channel(c1[1] + (c2[1] - c1[1]) * t),
+        clamp_channel(c1[2] + (c2[2] - c1[2]) * t),
+    )
+
+
+def palette_color(palette: Sequence[Sequence[int]], t: float) -> tuple[int, int, int]:
+    t = max(0.0, min(1.0, t))
+    if t <= 0:
+        return int(palette[0][0]), int(palette[0][1]), int(palette[0][2])
+    if t >= 1:
+        return int(palette[-1][0]), int(palette[-1][1]), int(palette[-1][2])
+    scaled = t * (len(palette) - 1)
+    idx = int(scaled)
+    frac = scaled - idx
+    return mix(palette[idx], palette[idx + 1], frac)
+
+
+def banded_texture(path: Path, palette: Sequence[Sequence[int]], seed: int, size: int = 768, storm: bool = False) -> None:
+    if path.exists():
+        return
+    img = Image.new('RGBA', (size, size))
+    pixels = img.load()
+    if pixels is None:
+        raise RuntimeError(f'Failed to create pixel access for {path}')
+    phase = seed * 0.71
+    for y in range(size):
+        ny = y / size
+        band = 0.5 + 0.28 * math.sin(ny * 12.0 * math.pi + phase)
+        band += 0.14 * math.sin(ny * 26.0 * math.pi + phase * 0.3)
+        band = max(0.0, min(1.0, band))
+        for x in range(size):
+            nx = x / size
+            wave = 0.05 * math.sin(nx * 14.0 * math.pi + ny * 7.0 * math.pi + phase)
+            wave += 0.03 * math.sin(nx * 36.0 * math.pi + phase * 1.7)
+            color_rgb = palette_color(palette, max(0.0, min(1.0, band + wave)))
+            shade = 0.9 + 0.1 * math.sin((nx + ny) * math.pi * 3.0 + phase)
+            pixels[x, y] = (
+                clamp_channel(color_rgb[0] * shade),
+                clamp_channel(color_rgb[1] * shade),
+                clamp_channel(color_rgb[2] * shade),
+                255,
+            )
+
+    if storm:
+        draw = ImageDraw.Draw(img, 'RGBA')
+        cx = int(size * 0.72)
+        cy = int(size * 0.58)
+        draw.ellipse((cx - 70, cy - 38, cx + 70, cy + 38), fill=(210, 120, 90, 180))
+        draw.ellipse((cx - 48, cy - 22, cx + 48, cy + 22), fill=(240, 160, 120, 220))
+
+    img = img.filter(ImageFilter.GaussianBlur(radius=0.6))
+    img.save(path)
+
+
+def rocky_texture(path: Path, base_palette: Sequence[Sequence[int]], seed: int, size: int = 768, crater_count: int = 80, cloud_layer: bool = False) -> None:
+    if path.exists():
+        return
+    rnd = random.Random(seed)
+    img = Image.new('RGBA', (size, size))
+    pixels = img.load()
+    if pixels is None:
+        raise RuntimeError(f'Failed to create pixel access for {path}')
+    for y in range(size):
+        ny = y / size
+        for x in range(size):
+            nx = x / size
+            noise = 0.5 + 0.22 * math.sin(nx * 9.0 * math.pi + ny * 5.0 * math.pi + seed)
+            noise += 0.18 * math.sin(nx * 23.0 * math.pi - ny * 11.0 * math.pi + seed * 0.37)
+            noise += 0.08 * math.cos((nx + ny) * 17.0 * math.pi + seed * 0.11)
+            noise = max(0.0, min(1.0, noise))
+            rgb = palette_color(base_palette, noise)
+            polar = 0.92 - abs(0.5 - ny) * 0.18
+            pixels[x, y] = (
+                clamp_channel(rgb[0] * polar),
+                clamp_channel(rgb[1] * polar),
+                clamp_channel(rgb[2] * polar),
+                255,
+            )
+
+    draw = ImageDraw.Draw(img, 'RGBA')
+    light_tone = palette_color(base_palette, 0.82)
+    cloud_tone = palette_color(base_palette, 0.9)
+    for _ in range(crater_count):
+        r = rnd.randint(size // 70, size // 18)
+        cx = rnd.randint(0, size)
+        cy = rnd.randint(0, size)
+        draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=(30, 20, 20, 255), width=max(1, r // 8))
+        draw.ellipse((cx - r // 2, cy - r // 2, cx + r // 2, cy + r // 2), fill=(light_tone[0], light_tone[1], light_tone[2], 255))
+
+    if cloud_layer:
+        for _ in range(95):
+            w = rnd.randint(size // 15, size // 7)
+            h = rnd.randint(size // 28, size // 14)
+            cx = rnd.randint(0, size)
+            cy = rnd.randint(0, size)
+            brightness = rnd.randint(-8, 10)
+            draw.ellipse(
+                (cx - w, cy - h, cx + w, cy + h),
+                fill=(
+                    clamp_channel(cloud_tone[0] + brightness),
+                    clamp_channel(cloud_tone[1] + brightness),
+                    clamp_channel(cloud_tone[2] + brightness),
+                    255,
+                ),
+            )
+
+    img = img.filter(ImageFilter.GaussianBlur(radius=0.8))
+    img.save(path)
+
+
+def earth_texture(path: Path, size: int = 1024) -> None:
+    if path.exists():
+        return
+    img = Image.new('RGBA', (size, size), (20, 78, 150, 255))
+    draw = ImageDraw.Draw(img, 'RGBA')
+
+    for y in range(size):
+        ny = y / size
+        for x in range(size):
+            nx = x / size
+            ocean_noise = 0.6 + 0.16 * math.sin(nx * 14 * math.pi + ny * 3 * math.pi)
+            ocean_noise += 0.09 * math.cos(nx * 30 * math.pi - ny * 9 * math.pi)
+            ocean = (clamp_channel(18 + ocean_noise * 25), clamp_channel(68 + ocean_noise * 40), clamp_channel(145 + ocean_noise * 50), 255)
+            img.putpixel((x, y), ocean)
+
+    continents = [
+        [(0.18, 0.34), (0.28, 0.22), (0.34, 0.36), (0.28, 0.52), (0.16, 0.48)],
+        [(0.53, 0.22), (0.69, 0.18), (0.76, 0.31), (0.69, 0.46), (0.56, 0.44), (0.48, 0.31)],
+        [(0.57, 0.58), (0.67, 0.55), (0.72, 0.65), (0.66, 0.82), (0.55, 0.78), (0.51, 0.67)],
+        [(0.82, 0.71), (0.89, 0.74), (0.86, 0.83), (0.79, 0.79)],
+    ]
+    for poly in continents:
+        scaled = [(x * size, y * size) for x, y in poly]
+        draw.polygon(scaled, fill=(62, 128, 66, 255))
+        for _ in range(25):
+            cx, cy = scaled[RNG.randrange(len(scaled))]
+            draw.ellipse((cx - 18, cy - 12, cx + 18, cy + 12), fill=(86, 144, 74, 180))
+
+    for _ in range(130):
+        w = RNG.randint(size // 28, size // 12)
+        h = RNG.randint(size // 48, size // 24)
+        cx = RNG.randint(0, size)
+        cy = RNG.randint(0, size)
+        draw.ellipse((cx - w, cy - h, cx + w, cy + h), fill=(255, 255, 255, RNG.randint(28, 72)))
+
+    img = img.filter(ImageFilter.GaussianBlur(radius=0.9))
+    img.save(path)
+
+
+def earth_clouds_texture(path: Path, size: int = 1024) -> None:
+    if path.exists():
+        return
+    img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img, 'RGBA')
+    rnd = random.Random(2201)
+
+    for _ in range(240):
+        w = rnd.randint(size // 30, size // 11)
+        h = rnd.randint(size // 45, size // 18)
+        cx = rnd.randint(0, size)
+        cy = rnd.randint(0, size)
+        alpha = rnd.randint(18, 92)
+        draw.ellipse((cx - w, cy - h, cx + w, cy + h), fill=(255, 255, 255, alpha))
+
+    for _ in range(80):
+        x1 = rnd.randint(0, size)
+        y1 = rnd.randint(0, size)
+        x2 = x1 + rnd.randint(size // 20, size // 8)
+        y2 = y1 + rnd.randint(-size // 40, size // 40)
+        draw.line((x1, y1, x2, y2), fill=(255, 255, 255, rnd.randint(18, 48)), width=rnd.randint(4, 10))
+
+    img = img.filter(ImageFilter.GaussianBlur(radius=3.2))
+    img.save(path)
+
+
+def earth_night_texture(path: Path, size: int = 1024) -> None:
+    if path.exists():
+        return
+    img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img, 'RGBA')
+    rnd = random.Random(3307)
+
+    city_bands = [
+        (0.22, 0.24, 0.34, 0.42),
+        (0.50, 0.20, 0.72, 0.34),
+        (0.54, 0.50, 0.72, 0.70),
+        (0.18, 0.56, 0.30, 0.72),
+    ]
+    for left, top, right, bottom in city_bands:
+        for _ in range(320):
+            x = rnd.randint(int(left * size), int(right * size))
+            y = rnd.randint(int(top * size), int(bottom * size))
+            radius = rnd.randint(1, 3)
+            glow = rnd.randint(90, 180)
+            draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=(255, 210, 110, glow))
+
+    for _ in range(80):
+        x1 = rnd.randint(0, size)
+        y1 = rnd.randint(0, size)
+        x2 = x1 + rnd.randint(size // 40, size // 10)
+        draw.line((x1, y1, x2, y1 + rnd.randint(-3, 3)), fill=(255, 190, 90, rnd.randint(32, 85)), width=rnd.randint(1, 3))
+
+    img = img.filter(ImageFilter.GaussianBlur(radius=1.8))
+    img.save(path)
+
+
+def nebula_texture(path: Path, size: int = 2048) -> None:
+    if path.exists():
+        return
+    img = Image.new('RGBA', (size, size), (4, 6, 14, 255))
+    draw = ImageDraw.Draw(img, 'RGBA')
+    rnd = random.Random(4104)
+
+    for y in range(size):
+        for x in range(size):
+            nx = x / size
+            ny = y / size
+            base = 0.24 + 0.12 * math.sin(nx * 5.4 * math.pi) + 0.08 * math.cos(ny * 4.8 * math.pi)
+            dust = 0.06 * math.sin((nx + ny) * 12.0 * math.pi) + 0.04 * math.cos((nx - ny) * 17.0 * math.pi)
+            shade = max(0.0, min(1.0, base + dust))
+            img.putpixel((x, y), (
+                clamp_channel(5 + shade * 16),
+                clamp_channel(7 + shade * 22),
+                clamp_channel(16 + shade * 44),
+                255,
+            ))
+
+    for palette in [
+        ((80, 120, 255, 16), (60, 40, 160, 0)),
+        ((200, 70, 150, 12), (100, 40, 110, 0)),
+        ((90, 180, 220, 10), (40, 80, 120, 0)),
+    ]:
+        for _ in range(8):
+            cx = rnd.randint(size // 8, size - size // 8)
+            cy = rnd.randint(size // 8, size - size // 8)
+            rx = rnd.randint(size // 10, size // 4)
+            ry = rnd.randint(size // 14, size // 5)
+            draw.ellipse((cx - rx, cy - ry, cx + rx, cy + ry), fill=palette[0])
+
+    for _ in range(1500):
+        x = rnd.randint(0, size - 1)
+        y = rnd.randint(0, size - 1)
+        alpha = rnd.randint(120, 255)
+        color_shift = rnd.randint(-20, 30)
+        img.putpixel((x, y), (
+            clamp_channel(220 + color_shift),
+            clamp_channel(225 + color_shift),
+            clamp_channel(255),
+            alpha,
+        ))
+
+    img = img.filter(ImageFilter.GaussianBlur(radius=1.2))
+    img.save(path)
+
+
+def sun_texture(path: Path, size: int = 1024) -> None:
+    if path.exists():
+        return
+    img = Image.new('RGBA', (size, size))
+    pixels = img.load()
+    if pixels is None:
+        raise RuntimeError(f'Failed to create pixel access for {path}')
+    center = size / 2.0
+    for y in range(size):
+        for x in range(size):
+            dx = (x - center) / center
+            dy = (y - center) / center
+            r = math.sqrt(dx * dx + dy * dy)
+            swirl = 0.5 + 0.25 * math.sin((math.atan2(dy, dx) * 6.0) + r * 16.0)
+            turbulence = 0.12 * math.sin(dx * 22.0 + dy * 19.0) + 0.08 * math.sin(dx * 41.0 - dy * 33.0)
+            heat = max(0.0, min(1.0, 1.0 - r * 0.95 + swirl * 0.22 + turbulence))
+            outer = max(0.0, 1.0 - r)
+            red = clamp_channel(180 + heat * 75)
+            green = clamp_channel(70 + heat * 125)
+            blue = clamp_channel(10 + outer * 40)
+            pixels[x, y] = (red, green, blue, 255)
+    img = img.filter(ImageFilter.GaussianBlur(radius=1.3))
+    img.save(path)
+
+
+def radial_glow(path: Path, core_color: Sequence[int], edge_color: Sequence[int], size: int = 1024) -> None:
+    if path.exists():
+        return
+    img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    pixels = img.load()
+    if pixels is None:
+        raise RuntimeError(f'Failed to create pixel access for {path}')
+    center = size / 2.0
+    for y in range(size):
+        for x in range(size):
+            dx = (x - center) / center
+            dy = (y - center) / center
+            r = min(1.0, math.sqrt(dx * dx + dy * dy))
+            alpha = (1.0 - r) ** 2.4
+            rgb = mix(core_color, edge_color, r)
+            pixels[x, y] = (rgb[0], rgb[1], rgb[2], clamp_channel(alpha * 255))
+    img.save(path)
+
+
+def saturn_ring(path: Path, size: int = 1024) -> None:
+    if path.exists():
+        return
+    img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    pixels = img.load()
+    if pixels is None:
+        raise RuntimeError(f'Failed to create pixel access for {path}')
+    center = size / 2.0
+    for y in range(size):
+        for x in range(size):
+            dx = (x - center) / center
+            dy = (y - center) / center
+            r = math.sqrt(dx * dx + dy * dy)
+            if 0.35 < r < 0.92:
+                bands = 0.65 + 0.25 * math.sin(r * 80.0)
+                alpha = 0.75 * (1.0 - abs(r - 0.63) / 0.29)
+                pixels[x, y] = (
+                    clamp_channel(190 + bands * 38),
+                    clamp_channel(170 + bands * 26),
+                    clamp_channel(130 + bands * 20),
+                    clamp_channel(alpha * 255),
+                )
+    img = img.filter(ImageFilter.GaussianBlur(radius=1.0))
+    img.save(path)
+
+
+def saturn_ring_back(path: Path, size: int = 1024) -> None:
+    if path.exists():
+        return
+    img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    pixels = img.load()
+    if pixels is None:
+        raise RuntimeError(f'Failed to create pixel access for {path}')
+    center = size / 2.0
+    for y in range(size):
+        for x in range(size):
+            dx = (x - center) / center
+            dy = (y - center) / center
+            r = math.sqrt(dx * dx + dy * dy)
+            if 0.34 < r < 0.94:
+                bands = 0.55 + 0.22 * math.sin(r * 72.0 + 0.8)
+                fade = max(0.0, 1.0 - abs(r - 0.67) / 0.31)
+                pixels[x, y] = (
+                    clamp_channel(125 + bands * 30),
+                    clamp_channel(112 + bands * 24),
+                    clamp_channel(92 + bands * 18),
+                    clamp_channel(fade * 115),
+                )
+    img = img.filter(ImageFilter.GaussianBlur(radius=1.6))
+    img.save(path)
+
+
+def ensure_assets():
+    ASSET_DIR.mkdir(parents=True, exist_ok=True)
+    nebula_texture(ASSET_DIR / 'deep_space.png')
+    sun_texture(ASSET_DIR / 'sun.png')
+    radial_glow(ASSET_DIR / 'sun_glow.png', (255, 214, 110), (255, 92, 0))
+    radial_glow(ASSET_DIR / 'halo.png', (255, 245, 210), (255, 128, 0))
+    saturn_ring(ASSET_DIR / 'saturn_ring.png')
+    saturn_ring_back(ASSET_DIR / 'saturn_ring_back.png')
+
+    rocky_texture(ASSET_DIR / 'mercury.png', [(64, 62, 58), (114, 108, 103), (155, 149, 145)], 1)
+    rocky_texture(ASSET_DIR / 'venus.png', [(145, 110, 54), (189, 145, 72), (222, 196, 126)], 2, crater_count=20, cloud_layer=True)
+    earth_texture(ASSET_DIR / 'earth.png')
+    earth_clouds_texture(ASSET_DIR / 'earth_clouds.png')
+    earth_night_texture(ASSET_DIR / 'earth_night.png')
+    rocky_texture(ASSET_DIR / 'moon.png', [(82, 82, 84), (118, 118, 120), (166, 166, 170)], 3, crater_count=120)
+    rocky_texture(ASSET_DIR / 'mars.png', [(94, 42, 24), (156, 80, 50), (202, 118, 72)], 4, crater_count=55)
+    rocky_texture(ASSET_DIR / 'phobos.png', [(58, 54, 50), (102, 96, 90), (132, 126, 120)], 5, crater_count=60)
+    rocky_texture(ASSET_DIR / 'deimos.png', [(75, 71, 68), (118, 112, 108), (152, 146, 138)], 6, crater_count=48)
+
+    banded_texture(ASSET_DIR / 'jupiter.png', [(128, 82, 58), (201, 146, 104), (230, 196, 160), (164, 110, 84)], 7, storm=True)
+    banded_texture(ASSET_DIR / 'saturn.png', [(160, 140, 88), (208, 188, 136), (232, 218, 175), (173, 152, 112)], 8)
+    banded_texture(ASSET_DIR / 'uranus.png', [(128, 180, 190), (158, 214, 222), (196, 240, 242)], 9)
+    banded_texture(ASSET_DIR / 'neptune.png', [(32, 58, 132), (46, 92, 188), (90, 144, 234)], 10)
+    rocky_texture(ASSET_DIR / 'io.png', [(182, 132, 60), (218, 184, 96), (226, 210, 120)], 11, crater_count=28)
+    rocky_texture(ASSET_DIR / 'europa.png', [(168, 140, 104), (216, 198, 166), (238, 228, 198)], 12, crater_count=22)
+    rocky_texture(ASSET_DIR / 'ganymede.png', [(86, 70, 58), (142, 118, 96), (190, 168, 138)], 13, crater_count=52)
+    rocky_texture(ASSET_DIR / 'callisto.png', [(72, 58, 48), (124, 96, 78), (165, 138, 114)], 14, crater_count=64)
+    rocky_texture(ASSET_DIR / 'titan.png', [(140, 102, 52), (190, 152, 86), (224, 194, 124)], 15, crater_count=15, cloud_layer=True)
+    rocky_texture(ASSET_DIR / 'rhea.png', [(116, 108, 102), (164, 156, 148), (210, 204, 198)], 16, crater_count=50)
+    rocky_texture(ASSET_DIR / 'titania.png', [(124, 140, 152), (174, 194, 204), (224, 240, 246)], 17, crater_count=45)
+    rocky_texture(ASSET_DIR / 'triton.png', [(116, 140, 160), (154, 182, 200), (212, 228, 238)], 18, crater_count=36)
+
+def pick_texture(preferred_real: str, fallback_generated: str) -> str:
+    real_path = ASSET_DIR / preferred_real
+    if real_path.exists():
+        return f'assets/{preferred_real}'
+    return f'assets/{fallback_generated}'
+
+
+def orbit_mesh(radius: float, segments: int = 160, eccentricity: float = 0.0) -> Mesh:
+    vertices = []
+    semi_major = radius
+    semi_minor = radius * math.sqrt(max(0.0, 1.0 - eccentricity * eccentricity))
+    focus_offset = semi_major * eccentricity
+    for i in range(segments + 1):
+        angle = (i / segments) * math.tau
+        vertices.append(Vec3(math.cos(angle) * semi_major - focus_offset, 0, math.sin(angle) * semi_minor))
+    return Mesh(vertices=vertices, mode='line', thickness=1, static=True)
+
+
+def scaled_orbit_speed(period_days: float, earth_speed: float = 10.0, exponent: float = 0.45) -> float:
+    return earth_speed * ((365.256 / period_days) ** exponent)
+
+
+def scaled_spin_speed(period_hours: float, earth_speed: float = 42.0, exponent: float = 0.3, retrograde: bool = False) -> float:
+    speed = earth_speed * ((23.934 / abs(period_hours)) ** exponent)
+    return -speed if retrograde else speed
+
+
+def scaled_moon_orbit_speed(period_days: float, base_period_days: float = 27.321661, base_speed: float = 20.0, exponent: float = 0.35) -> float:
+    return base_speed * ((base_period_days / period_days) ** exponent)
+
+
+def projected_on_plane(vector: Vec3, normal: Vec3) -> Vec3:
+    return vector - normal * vector.dot(normal)
+
+
+def compute_spin_axis_heading(alpha_deg: float, delta_deg: float, orbit_normal: Vec3) -> float:
+    alpha = math.radians(alpha_deg)
+    delta = math.radians(delta_deg)
+    pole_vector = Vec3(
+        math.cos(delta) * math.cos(alpha),
+        math.sin(delta),
+        math.cos(delta) * math.sin(alpha),
+    )
+    plane_normal = orbit_normal.normalized()
+    projected_pole = projected_on_plane(pole_vector, plane_normal)
+    if projected_pole.length() < 1e-4:
+        return 0.0
+    projected_pole = projected_pole.normalized()
+
+    reference_x = projected_on_plane(Vec3(1, 0, 0), plane_normal)
+    if reference_x.length() < 1e-4:
+        reference_x = projected_on_plane(Vec3(0, 0, 1), plane_normal)
+    reference_x = reference_x.normalized()
+    reference_y = plane_normal.cross(reference_x).normalized()
+    heading = math.degrees(math.atan2(projected_pole.dot(reference_y), projected_pole.dot(reference_x)))
+    return heading % 360.0
+
+
+VISUAL_SCALE = {
+    'sun_body_scale_factor': 0.00001,
+    'planet_radius_factor': 1.35,
+    'moon_radius_factor': 1.0,
+    'min_planet_radius': 0.72,
+    'min_moon_radius': 0.05,
+    'planet_distance_factor': 19.0,
+    'moon_distance_factor': 2.2,
+    'planet_distance_exponent': 0.42,
+    'moon_distance_exponent': 0.36,
+}
+
+
+PLANET_DATA: dict[str, dict[str, Any]] = {
+    'Mercury': {'texture': lambda: pick_texture('mercury_real.jpg', 'mercury.png'), 'orbit_speed_days': 87.969, 'spin_hours': 1407.6, 'tilt': 0.03, 'orbit_tilt': 7.0, 'orbit_phase': 48, 'eccentricity': 0.2056, 'retrograde_spin': False, 'pole_ra': 281.01, 'pole_dec': 61.45},
+    'Venus': {'texture': lambda: pick_texture('venus_real.jpg', 'venus.png'), 'orbit_speed_days': 224.701, 'spin_hours': 5832.5, 'tilt': 177.3, 'orbit_tilt': 3.4, 'orbit_phase': 92, 'eccentricity': 0.0068, 'retrograde_spin': True, 'pole_ra': 272.76, 'pole_dec': 67.16},
+    'Earth': {'texture': lambda: pick_texture('earth_real.jpg', 'earth.png'), 'orbit_speed_days': 365.256, 'spin_hours': 23.934, 'tilt': 23.44, 'orbit_tilt': 0.0, 'orbit_phase': 140, 'eccentricity': 0.0167, 'retrograde_spin': False, 'pole_ra': 0.0, 'pole_dec': 90.0},
+    'Mars': {'texture': lambda: 'mars.png', 'orbit_speed_days': 686.98, 'spin_hours': 24.623, 'tilt': 25.19, 'orbit_tilt': 1.85, 'orbit_phase': 210, 'eccentricity': 0.0934, 'retrograde_spin': False, 'pole_ra': 317.68, 'pole_dec': 52.89},
+    'Jupiter': {'texture': lambda: pick_texture('jupiter_real.jpg', 'jupiter.png'), 'orbit_speed_days': 4332.59, 'spin_hours': 9.93, 'tilt': 3.13, 'orbit_tilt': 1.3, 'orbit_phase': 280, 'eccentricity': 0.0489, 'retrograde_spin': False, 'pole_ra': 268.06, 'pole_dec': 64.5},
+    'Saturn': {'texture': lambda: pick_texture('saturn_real.jpg', 'saturn.png'), 'orbit_speed_days': 10759.22, 'spin_hours': 10.66, 'tilt': 26.7, 'orbit_tilt': 2.5, 'orbit_phase': 320, 'eccentricity': 0.0565, 'retrograde_spin': False, 'pole_ra': 40.72, 'pole_dec': 83.54},
+    'Uranus': {'texture': lambda: 'uranus.png', 'orbit_speed_days': 30688.5, 'spin_hours': 17.24, 'tilt': 97.77, 'orbit_tilt': 0.77, 'orbit_phase': 18, 'eccentricity': 0.0463, 'retrograde_spin': False, 'pole_ra': 257.31, 'pole_dec': -15.17},
+    'Neptune': {'texture': lambda: 'neptune.png', 'orbit_speed_days': 60182.0, 'spin_hours': 16.11, 'tilt': 28.32, 'orbit_tilt': 1.77, 'orbit_phase': 70, 'eccentricity': 0.0086, 'retrograde_spin': False, 'pole_ra': 299.36, 'pole_dec': -8.93},
+}
+
+
+PLANET_REAL: dict[str, dict[str, float]] = {
+    'Sun': {'radius_km': 696340.0, 'orbit_au': 0.0},
+    'Mercury': {'radius_km': 2439.4, 'orbit_au': 0.387098},
+    'Venus': {'radius_km': 6051.8, 'orbit_au': 0.723332},
+    'Earth': {'radius_km': 6371.0084, 'orbit_au': 1.0},
+    'Mars': {'radius_km': 3389.5, 'orbit_au': 1.523679},
+    'Jupiter': {'radius_km': 69911.0, 'orbit_au': 5.203366},
+    'Saturn': {'radius_km': 58232.0, 'orbit_au': 9.53707},
+    'Uranus': {'radius_km': 25362.0, 'orbit_au': 19.191281},
+    'Neptune': {'radius_km': 24622.0, 'orbit_au': 30.068923},
+}
+
+
+MOON_DATA: dict[str, dict[str, Any]] = {
+    'Moon': {'texture': lambda: pick_texture('moon_real.jpg', 'moon.png'), 'period_days': 27.321661, 'tilt': 1.5, 'orbit_tilt': 5.1, 'orbit_phase': 35, 'eccentricity': 0.0549, 'orbit_color': color.rgba(85, 100, 150, 80)},
+    'Phobos': {'texture': lambda: 'phobos.png', 'period_days': 0.31891, 'tilt': 0.0, 'orbit_tilt': 1.1, 'orbit_phase': 10, 'eccentricity': 0.0151, 'orbit_color': color.rgba(120, 85, 65, 80)},
+    'Deimos': {'texture': lambda: 'deimos.png', 'period_days': 1.26244, 'tilt': 0.0, 'orbit_tilt': 1.5, 'orbit_phase': 200, 'eccentricity': 0.0002, 'orbit_color': color.rgba(120, 85, 65, 80)},
+    'Io': {'texture': lambda: 'io.png', 'period_days': 1.769, 'tilt': 0.0, 'orbit_tilt': 0.04, 'orbit_phase': 40, 'eccentricity': 0.0041, 'orbit_color': color.rgba(135, 120, 80, 80)},
+    'Europa': {'texture': lambda: 'europa.png', 'period_days': 3.551, 'tilt': 0.0, 'orbit_tilt': 0.1, 'orbit_phase': 120, 'eccentricity': 0.0094, 'orbit_color': color.rgba(120, 125, 150, 80)},
+    'Ganymede': {'texture': lambda: 'ganymede.png', 'period_days': 7.155, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 210, 'eccentricity': 0.0013, 'orbit_color': color.rgba(110, 100, 88, 80)},
+    'Callisto': {'texture': lambda: 'callisto.png', 'period_days': 16.689, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 300, 'eccentricity': 0.0074, 'orbit_color': color.rgba(100, 90, 82, 80)},
+    'Titan': {'texture': lambda: 'titan.png', 'period_days': 15.945, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 60, 'eccentricity': 0.0288, 'orbit_color': color.rgba(130, 112, 80, 80)},
+    'Rhea': {'texture': lambda: 'rhea.png', 'period_days': 4.518, 'tilt': 0.0, 'orbit_tilt': 0.3, 'orbit_phase': 250, 'eccentricity': 0.0010, 'orbit_color': color.rgba(110, 110, 115, 80)},
+    'Titania': {'texture': lambda: 'titania.png', 'period_days': 8.706, 'tilt': 0.0, 'orbit_tilt': 0.25, 'orbit_phase': 135, 'eccentricity': 0.0011, 'orbit_color': color.rgba(85, 120, 140, 80)},
+    'Triton': {'texture': lambda: 'triton.png', 'period_days': 5.877, 'tilt': 0.0, 'orbit_tilt': 156.8, 'orbit_phase': 45, 'eccentricity': 0.0, 'orbit_color': color.rgba(70, 95, 140, 80), 'retrograde_orbit': True},
+}
+
+
+MOON_REAL: dict[str, dict[str, Any]] = {
+    'Moon': {'parent': 'Earth', 'radius_km': 1737.4, 'semi_major_axis_km': 384400.0},
+    'Phobos': {'parent': 'Mars', 'radius_km': 11.1, 'semi_major_axis_km': 9376.0},
+    'Deimos': {'parent': 'Mars', 'radius_km': 6.2, 'semi_major_axis_km': 23460.0},
+    'Io': {'parent': 'Jupiter', 'radius_km': 1821.6, 'semi_major_axis_km': 421700.0},
+    'Europa': {'parent': 'Jupiter', 'radius_km': 1560.8, 'semi_major_axis_km': 671000.0},
+    'Ganymede': {'parent': 'Jupiter', 'radius_km': 2634.1, 'semi_major_axis_km': 1070000.0},
+    'Callisto': {'parent': 'Jupiter', 'radius_km': 2410.3, 'semi_major_axis_km': 1882700.0},
+    'Titan': {'parent': 'Saturn', 'radius_km': 2575.0, 'semi_major_axis_km': 1221870.0},
+    'Rhea': {'parent': 'Saturn', 'radius_km': 764.0, 'semi_major_axis_km': 527108.0},
+    'Titania': {'parent': 'Uranus', 'radius_km': 789.4, 'semi_major_axis_km': 435910.0},
+    'Triton': {'parent': 'Neptune', 'radius_km': 1353.4, 'semi_major_axis_km': 354800.0},
+}
+
+
+def scaled_body_radius(real_radius_km: float, factor: float) -> float:
+    return real_radius_km * factor
+
+
+def scaled_visual_radius(real_radius_km: float, factor: float, minimum: float) -> float:
+    return max(minimum, math.sqrt(real_radius_km) * factor / 100.0)
+
+
+def scaled_distance_km(real_distance_km: float, factor: float) -> float:
+    return real_distance_km * factor
+
+
+def scaled_planet_distance(orbit_au: float, factor: float, exponent: float) -> float:
+    return (max(orbit_au, 0.0) ** exponent) * factor
+
+
+def scaled_moon_distance(semi_major_axis_km: float, factor: float, exponent: float, base_distance_km: float = 384400.0) -> float:
+    relative_distance = max(semi_major_axis_km, 1.0) / base_distance_km
+    return (relative_distance ** exponent) * factor
+
+
+def au_to_km(au: float) -> float:
+    return au * 149_597_870.7
+
+
+class OrbitalBody:
+    def __init__(
+        self,
+        name: str,
+        texture: str,
+        distance: float,
+        radius: float,
+        orbit_speed: float,
+        spin_speed: float,
+        tilt: float = 0,
+        orbit_tilt: float = 0,
+        orbit_phase: float = 0,
+        spin_axis_heading: float = 0,
+        eccentricity: float = 0,
+        parent=scene,
+        orbit_color=color.rgba(90, 110, 140, 80),
+        orbit_y: float = 0,
+    ) -> None:
+        self.name = name
+        self.distance = distance
+        self.orbit_speed = orbit_speed
+        self.spin_speed = spin_speed
+        self.eccentricity = eccentricity
+        self.mean_anomaly = 0.0
+        self.orbit_plane = Entity(parent=parent, rotation=(orbit_tilt, orbit_phase, 0), y=orbit_y)
+        self.pivot = Entity(parent=self.orbit_plane, rotation_y=0)
+        self.anchor = Entity(parent=self.pivot, x=distance)
+        self.axis_heading = Entity(parent=self.anchor, rotation_y=spin_axis_heading)
+        self.axis_tilt = Entity(parent=self.axis_heading, rotation_z=tilt)
+        self.spin_pivot = Entity(parent=self.axis_tilt, rotation_y=0)
+        self.visual_root = Entity(parent=self.spin_pivot)
+        self.body = Entity(
+            parent=self.visual_root,
+            model='sphere',
+            texture=texture,
+            scale=radius,
+            collider=None,
+        )
+        self.orbit = None
+        self.moons = []
+        if distance > 0:
+            self.orbit = Entity(parent=self.orbit_plane, model=orbit_mesh(distance, eccentricity=eccentricity), color=orbit_color)
+
+    def add_moon(self, moon: OrbitalBody) -> None:
+        self.moons.append(moon)
+
+    def update(self, dt: float, speed: float) -> None:
+        if self.distance > 0:
+            self.mean_anomaly = (self.mean_anomaly + math.radians(self.orbit_speed * dt * speed)) % math.tau
+            eccentric_anomaly = self.mean_anomaly
+            for _ in range(5):
+                eccentric_anomaly -= (eccentric_anomaly - self.eccentricity * math.sin(eccentric_anomaly) - self.mean_anomaly) / max(0.2, 1.0 - self.eccentricity * math.cos(eccentric_anomaly))
+            true_anomaly = 2.0 * math.atan2(
+                math.sqrt(1.0 + self.eccentricity) * math.sin(eccentric_anomaly / 2.0),
+                math.sqrt(max(1e-6, 1.0 - self.eccentricity)) * math.cos(eccentric_anomaly / 2.0),
+            )
+            orbital_radius = self.distance * (1.0 - self.eccentricity * math.cos(eccentric_anomaly))
+            self.pivot.rotation_y = math.degrees(true_anomaly)
+            self.anchor.position = Vec3(orbital_radius, 0, 0)
+        self.spin_pivot.rotation_y += self.spin_speed * dt * speed
+        for moon in self.moons:
+            moon.update(dt, speed)
+
+
+def set_orbit_visibility(body: OrbitalBody, visible: bool) -> None:
+    if body.orbit is not None:
+        body.orbit.enabled = visible
+    for moon in body.moons:
+        set_orbit_visibility(moon, visible)
+
+
+def add_starfield(count: int = 1400, spread: float = 1400) -> None:
+    return
+
+
+def add_deep_space_backdrop() -> None:
+    return
+
+
+def add_space_panorama() -> Entity:
+    return Entity(
+        model='sphere',
+        texture='assets/space_bg_8k.png',
+        scale=3500,
+        double_sided=True,
+        color=color.white,
+    )
+
+
+def build_scene():
+    dark_space = color.black
+    ui_font = '/c/Windows/Fonts/simhei.ttf'
+    window.title = '太阳系 3D 模型'
+    window.color = dark_space
+    window.fps_counter.enabled = True
+    window.exit_button.visible = False
+    camera.clip_plane_near = 0.01
+    camera.clip_plane_far = 200000
+    camera.color = dark_space
+    camera.overlay.color = color.clear
+
+    if application.base:
+        application.base.setBackgroundColor(dark_space)
+        display_region = application.base.camNode.get_display_region(0)
+        display_region.set_clear_color_active(True)
+        display_region.get_window().set_clear_color(dark_space)
+
+    AmbientLight(color=color.rgba(145, 145, 165, 1))
+    add_deep_space_backdrop()
+    space_panorama = add_space_panorama()
+
+    sun_radius = scaled_body_radius(PLANET_REAL['Sun']['radius_km'], VISUAL_SCALE['sun_body_scale_factor'])
+    sun = OrbitalBody('Sun', pick_texture('sun_real.jpg', 'sun.png'), 0, sun_radius, 0, 6)
+    PointLight(parent=sun.anchor, color=color.rgb(255, 225, 170), shadows=False)
+
+    sun_shell_1 = Entity(
+        parent=sun.anchor,
+        model='sphere',
+        texture='assets/sun_glow.png',
+        scale=sun_radius * 1.045,
+        color=color.rgba(255, 150, 55, 38),
+        double_sided=False,
+    )
+    sun_shell_2 = Entity(
+        parent=sun.anchor,
+        model='sphere',
+        texture='assets/sun_glow.png',
+        scale=sun_radius * 1.112,
+        color=color.rgba(255, 95, 18, 22),
+        double_sided=False,
+    )
+    sun_shell_3 = Entity(
+        parent=sun.anchor,
+        model='sphere',
+        texture='assets/sun_glow.png',
+        scale=sun_radius * 1.198,
+        color=color.rgba(255, 68, 0, 14),
+        double_sided=False,
+    )
+    flame_roots = []
+    flame_tongues = []
+    flame_count = 18
+    flame_ring_rotations = [(0, 0, 0), (62, 0, 18), (-58, 0, -22), (0, 58, 34)]
+    for ring_index, ring_rotation in enumerate(flame_ring_rotations):
+        flame_root = Entity(parent=sun.anchor, rotation=ring_rotation)
+        flame_roots.append(flame_root)
+        for i in range(flame_count):
+            angle = math.tau * (i / flame_count)
+            tongue = Entity(
+                parent=flame_root,
+                model='quad',
+                texture='assets/sun_glow.png',
+                scale=(sun_radius * 0.34, sun_radius * 0.92),
+                position=(math.cos(angle) * sun_radius * 0.50, math.sin(angle) * sun_radius * 0.50, 0),
+                rotation_x=90,
+                rotation_y=i * (360 / flame_count),
+                rotation_z=i * (360 / flame_count),
+                color=color.rgba(255, 132, 32, 34),
+                double_sided=True,
+            )
+            flame_tongues.append((tongue, ring_index, i))
+    halo = Entity(
+        parent=sun.anchor,
+        model='quad',
+        texture='assets/halo.png',
+        scale=0,
+        color=color.rgba(255, 220, 170, 0),
+        double_sided=False,
+        enabled=False,
+    )
+
+    planet_bodies = {}
+    for name in ('Mercury', 'Venus', 'Earth', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune'):
+        data = PLANET_DATA[name]
+        real = PLANET_REAL[name]
+        texture_fn = cast(Callable[[], str], data['texture'])
+        orbit_speed_days = float(data['orbit_speed_days'])
+        spin_hours = float(data['spin_hours'])
+        tilt = float(data['tilt'])
+        orbit_tilt = float(data['orbit_tilt'])
+        orbit_phase = float(data['orbit_phase'])
+        eccentricity = float(data['eccentricity'])
+        retrograde_spin = bool(data['retrograde_spin'])
+        pole_ra = float(data['pole_ra'])
+        pole_dec = float(data['pole_dec'])
+        orbit_au = float(real['orbit_au'])
+        radius_km = float(real['radius_km'])
+        orbit_distance = scaled_planet_distance(orbit_au, VISUAL_SCALE['planet_distance_factor'], VISUAL_SCALE['planet_distance_exponent'])
+        minimum_orbit_distance = sun_radius * 0.9 + scaled_visual_radius(radius_km, VISUAL_SCALE['planet_radius_factor'], VISUAL_SCALE['min_planet_radius']) * 2.2
+        body = OrbitalBody(
+            name,
+            texture_fn(),
+            max(orbit_distance, minimum_orbit_distance),
+            scaled_visual_radius(radius_km, VISUAL_SCALE['planet_radius_factor'], VISUAL_SCALE['min_planet_radius']),
+            scaled_orbit_speed(orbit_speed_days),
+            scaled_spin_speed(spin_hours, retrograde=retrograde_spin),
+            tilt=tilt,
+            orbit_tilt=orbit_tilt,
+            orbit_phase=orbit_phase,
+            spin_axis_heading=0,
+            eccentricity=eccentricity,
+        )
+        body.axis_heading.rotation_y = compute_spin_axis_heading(pole_ra, pole_dec, body.orbit_plane.up)
+        planet_bodies[name] = body
+
+    mercury = planet_bodies['Mercury']
+    venus = planet_bodies['Venus']
+    earth = planet_bodies['Earth']
+    mars = planet_bodies['Mars']
+    jupiter = planet_bodies['Jupiter']
+    saturn = planet_bodies['Saturn']
+    uranus = planet_bodies['Uranus']
+    neptune = planet_bodies['Neptune']
+
+    earth_night = Entity(
+        parent=earth.visual_root,
+        model='sphere',
+        texture='assets/earth_night.png',
+        scale=1.02,
+        color=color.rgba(255, 210, 120, 110),
+        double_sided=True,
+    )
+    earth_clouds = Entity(
+        parent=earth.visual_root,
+        model='sphere',
+        texture='assets/earth_clouds.png',
+        scale=1.045,
+        color=color.rgba(255, 255, 255, 122),
+        double_sided=True,
+    )
+
+    saturn_ring_back_entity = Entity(
+        parent=saturn.axis_tilt,
+        model='quad',
+        texture='assets/saturn_ring_back.png',
+        scale=saturn.body.scale_x * 2.32,
+        rotation_x=90,
+        rotation_z=0,
+        color=color.rgba(255, 255, 255, 120),
+        double_sided=True,
+    )
+    saturn_ring_entity = Entity(
+        parent=saturn.axis_tilt,
+        model='quad',
+        texture='assets/saturn_ring.png',
+        scale=saturn.body.scale_x * 2.32,
+        rotation_x=90,
+        rotation_z=0,
+        color=color.rgba(255, 255, 255, 210),
+        double_sided=True,
+    )
+
+    def add_scaled_moon(parent_body: OrbitalBody, moon_name: str, parent_transform, orbit_speed_sign: float = 1.0) -> OrbitalBody:
+        moon_data = MOON_DATA[moon_name]
+        moon_real = MOON_REAL[moon_name]
+        parent_real = PLANET_REAL[parent_body.name]
+        texture_fn = cast(Callable[[], str], moon_data['texture'])
+        period_days = float(moon_data['period_days'])
+        tilt = float(moon_data['tilt'])
+        orbit_tilt = float(moon_data['orbit_tilt'])
+        orbit_phase = float(moon_data['orbit_phase'])
+        eccentricity = float(moon_data['eccentricity'])
+        orbit_color = moon_data['orbit_color']
+        semi_major_axis_km = float(moon_real['semi_major_axis_km'])
+        radius_km = float(moon_real['radius_km'])
+        orbit_distance = scaled_moon_distance(semi_major_axis_km, VISUAL_SCALE['moon_distance_factor'], VISUAL_SCALE['moon_distance_exponent'])
+        if parent_body.name == 'Saturn':
+            parent_radius_km = float(parent_real['radius_km'])
+            parent_visual_radius = float(parent_body.body.scale_x) * 0.5
+            realistic_ratio_distance = parent_visual_radius * (semi_major_axis_km / parent_radius_km)
+            minimum_outside_rings = parent_visual_radius * 2.55
+            orbit_distance = max(minimum_outside_rings, realistic_ratio_distance * 0.18)
+        elif parent_body.name == 'Jupiter':
+            parent_radius_km = float(parent_real['radius_km'])
+            parent_visual_radius = float(parent_body.body.scale_x) * 0.5
+            realistic_ratio_distance = parent_visual_radius * (semi_major_axis_km / parent_radius_km)
+            minimum_clear_distance = parent_visual_radius * 1.65
+            orbit_distance = max(minimum_clear_distance, realistic_ratio_distance * 0.22)
+        moon = OrbitalBody(
+            moon_name,
+            texture_fn(),
+            orbit_distance,
+            scaled_visual_radius(radius_km, VISUAL_SCALE['moon_radius_factor'], VISUAL_SCALE['min_moon_radius']),
+            scaled_moon_orbit_speed(period_days) * orbit_speed_sign,
+            0,
+            tilt=tilt,
+            orbit_tilt=orbit_tilt,
+            orbit_phase=orbit_phase,
+            eccentricity=eccentricity,
+            parent=parent_transform,
+            orbit_color=orbit_color,
+        )
+        parent_body.add_moon(moon)
+        return moon
+
+    add_scaled_moon(earth, 'Moon', earth.anchor)
+    add_scaled_moon(mars, 'Phobos', mars.axis_tilt)
+    add_scaled_moon(mars, 'Deimos', mars.axis_tilt)
+    add_scaled_moon(jupiter, 'Io', jupiter.axis_tilt)
+    add_scaled_moon(jupiter, 'Europa', jupiter.axis_tilt)
+    add_scaled_moon(jupiter, 'Ganymede', jupiter.axis_tilt)
+    add_scaled_moon(jupiter, 'Callisto', jupiter.axis_tilt)
+    add_scaled_moon(saturn, 'Titan', saturn.axis_tilt)
+    add_scaled_moon(saturn, 'Rhea', saturn.axis_tilt)
+    add_scaled_moon(uranus, 'Titania', uranus.axis_tilt)
+    add_scaled_moon(neptune, 'Triton', neptune.axis_tilt, orbit_speed_sign=-1.0)
+
+    planets = [sun, mercury, venus, earth, mars, jupiter, saturn, uranus, neptune]
+    add_starfield()
+
+    hotkey_text = Text(
+        text='0 全景 | 1 水星 | 2 金星 | 3 地球 | 4 火星 | 5 木星 | 6 土星 | 7 天王星 | 8 海王星 | 空格 轨道',
+        x=-0.86,
+        y=0.46,
+        scale=0.9,
+        color=color.rgba(255, 255, 255, 185),
+        font=ui_font,
+    )
+    orbit_status_text = Text(
+        text='轨道：显示 [空格]',
+        x=0.54,
+        y=0.46,
+        scale=1.0,
+        color=color.rgba(170, 255, 190, 235),
+        font=ui_font,
+    )
+    target_status_text = Text(
+        text='当前目标：全景',
+        x=0.54,
+        y=0.40,
+        scale=1.0,
+        color=color.rgba(130, 210, 255, 235),
+        font=ui_font,
+    )
+
+    editor_camera = EditorCamera(rotation_smoothing=2, rotate_key='right mouse', move_speed=60, pan_speed=(10, 10), zoom_speed=0, enabled=True)
+    editor_camera.position = (0, 18, -150)
+    editor_camera.look_at(sun.anchor.world_position)
+    editor_camera.target_z = -150
+    camera.z = -150
+
+    simulation_speed = 1.45
+    last_tick = pytime.perf_counter()
+    pan_sensitivity = 180
+    camera_mode = 'overview'
+    overview_position = Vec3(0, 18, -150)
+    target_body = mercury
+    follow_distances = {
+        'Mercury': 8.0,
+        'Venus': 10.0,
+        'Earth': 12.8,
+        'Mars': 10.4,
+        'Jupiter': 22.0,
+        'Saturn': 20.0,
+        'Uranus': 14.4,
+        'Neptune': 14.0,
+    }
+    earth_free_pan_sensitivity = 28
+    earth_free_rotate_sensitivity = 110
+    orbits_visible = True
+    follow_focus_point = mercury.anchor.world_position
+    follow_up_vector = mercury.orbit_plane.up.normalized()
+    transition_timer = 0.0
+    transition_duration = 0.9
+
+    body_hotkeys = {
+        '1': mercury,
+        '2': venus,
+        '3': earth,
+        '4': mars,
+        '5': jupiter,
+        '6': saturn,
+        '7': uranus,
+        '8': neptune,
+    }
+    body_to_hotkey = {body.name: key for key, body in body_hotkeys.items()}
+    body_display_names = {
+        'Mercury': '水星',
+        'Venus': '金星',
+        'Earth': '地球',
+        'Mars': '火星',
+        'Jupiter': '木星',
+        'Saturn': '土星',
+        'Uranus': '天王星',
+        'Neptune': '海王星',
+    }
+
+    def camera_focus_point(distance: float = 40.0) -> Vec3:
+        return camera.world_position + camera.forward * distance
+
+    def camera_up_vector() -> Vec3:
+        up = Vec3(camera.up)
+        return up.normalized() if up.length() > 0.001 else Vec3(0, 1, 0)
+
+    def refresh_orbit_status_text() -> None:
+        orbit_status_text.text = f'轨道：{"显示" if orbits_visible else "隐藏"} [空格]'
+        orbit_status_text.color = color.rgba(170, 255, 190, 235) if orbits_visible else color.rgba(255, 170, 170, 235)
+
+    def refresh_target_ui() -> None:
+        if camera_mode in ('overview', 'transition_overview'):
+            selected_key = '0'
+            target_status_text.text = '当前目标：全景'
+            target_status_text.color = color.rgba(130, 210, 255, 235)
+        else:
+            selected_key = body_to_hotkey.get(target_body.name)
+            suffix = '（自由）' if camera_mode == 'earth_free' else ''
+            target_status_text.text = f'当前目标：{body_display_names.get(target_body.name, target_body.name)}{suffix}'
+            target_status_text.color = color.rgba(255, 225, 140, 235) if camera_mode != 'earth_free' else color.rgba(255, 190, 140, 235)
+
+        hotkey_segments = []
+        for key, label in [('0', '全景'), ('1', '水星'), ('2', '金星'), ('3', '地球'), ('4', '火星'), ('5', '木星'), ('6', '土星'), ('7', '天王星'), ('8', '海王星')]:
+            hotkey_segments.append(f'[{key} {label}]' if key == selected_key else f'{key} {label}')
+        hotkey_text.text = ' | '.join(hotkey_segments) + ' | 空格 轨道'
+
+    def begin_follow_transition(new_body: OrbitalBody) -> None:
+        nonlocal camera_mode, target_body, follow_focus_point, follow_up_vector, transition_timer
+        world_position = Vec3(camera.world_position)
+        focus_point = camera_focus_point()
+        up_vector = camera_up_vector()
+        editor_camera.enabled = False
+        camera.parent = scene
+        camera.world_position = world_position
+        camera.look_at(focus_point, up=up_vector)
+        camera_mode = 'transition_follow'
+        target_body = new_body
+        transition_timer = 0.0
+        follow_focus_point = focus_point
+        follow_up_vector = up_vector
+        refresh_target_ui()
+
+    def begin_overview_transition() -> None:
+        nonlocal camera_mode, follow_focus_point, follow_up_vector, transition_timer
+        world_position = Vec3(camera.world_position)
+        focus_point = camera_focus_point()
+        up_vector = camera_up_vector()
+        editor_camera.enabled = False
+        camera.parent = scene
+        camera.world_position = world_position
+        camera.look_at(focus_point, up=up_vector)
+        camera_mode = 'transition_overview'
+        transition_timer = 0.0
+        follow_focus_point = focus_point
+        follow_up_vector = up_vector
+        refresh_target_ui()
+
+    refresh_orbit_status_text()
+    refresh_target_ui()
+
+    def input(key):
+        nonlocal camera_mode, target_body, orbits_visible, follow_focus_point, follow_up_vector
+        cam_distance = max(4.0, (sun.anchor.world_position - camera.world_position).length() * 0.18)
+        if key == 'scroll up' and camera_mode == 'overview':
+            editor_camera.position += camera.forward * cam_distance
+        elif key == 'scroll down' and camera_mode == 'overview':
+            editor_camera.position -= camera.forward * cam_distance
+        elif key == 'scroll up' and camera_mode == 'earth_free':
+            camera.position += camera.forward * 2.5
+        elif key == 'scroll down' and camera_mode == 'earth_follow':
+            camera_mode = 'earth_free'
+            camera.position -= camera.forward * 2.5
+            refresh_target_ui()
+        elif key == 'scroll down' and camera_mode == 'earth_free':
+            camera.position -= camera.forward * 2.5
+        elif key in body_hotkeys:
+            begin_follow_transition(body_hotkeys[key])
+        elif key == '0':
+            begin_overview_transition()
+        elif key == 'space':
+            orbits_visible = not orbits_visible
+            for body in planets:
+                set_orbit_visibility(body, orbits_visible)
+            refresh_orbit_status_text()
+
+    globals()['input'] = input
+
+    def update():
+        nonlocal last_tick, camera_mode, follow_focus_point, follow_up_vector, transition_timer
+        now = pytime.perf_counter()
+        dt = min(now - last_tick, 0.05)
+        last_tick = now
+
+        if mouse.left and camera_mode == 'overview':
+            zoom_compensation = max(0.35, abs(editor_camera.target_z) * 0.08)
+            editor_camera.position -= camera.right * mouse.velocity[0] * pan_sensitivity * dt * zoom_compensation
+            editor_camera.position -= camera.up * mouse.velocity[1] * pan_sensitivity * dt * zoom_compensation
+        elif mouse.left and camera_mode == 'earth_free':
+            camera.position -= camera.right * mouse.velocity[0] * earth_free_pan_sensitivity
+            camera.position -= camera.up * mouse.velocity[1] * earth_free_pan_sensitivity
+
+        if mouse.right and camera_mode == 'earth_free':
+            camera.rotation_x -= mouse.velocity[1] * earth_free_rotate_sensitivity
+            camera.rotation_y += mouse.velocity[0] * earth_free_rotate_sensitivity
+
+        t = pytime.time()
+        current_sun_radius = float(sun.body.scale_x)
+        flame_surface_radius = current_sun_radius * 0.5
+        sun_shell_1.rotation_y += dt * 18
+        sun_shell_1.texture_offset = Vec2(t * 0.015, t * 0.01)
+        sun_shell_1.scale = current_sun_radius * (1.045 + math.sin(t * 3.9) * 0.018 + math.sin(t * 9.5) * 0.008)
+        sun_shell_1.color = color.rgba(
+            int(248 + math.sin(t * 2.1) * 7),
+            int(132 + math.sin(t * 3.3 + 0.6) * 20),
+            int(36 + math.sin(t * 5.1) * 14),
+            int(34 + math.sin(t * 4.2) * 8),
+        )
+
+        sun_shell_2.rotation_y -= dt * 13
+        sun_shell_2.texture_offset = Vec2(-t * 0.01, t * 0.013)
+        sun_shell_2.scale = current_sun_radius * (1.112 + math.sin(t * 2.8 + 1.5) * 0.027 + math.sin(t * 7.3) * 0.012)
+        sun_shell_2.color = color.rgba(
+            int(255),
+            int(82 + math.sin(t * 2.5 + 0.8) * 16),
+            int(12 + math.sin(t * 4.7 + 1.3) * 8),
+            int(18 + math.sin(t * 3.7) * 7),
+        )
+        sun_shell_3.rotation_y += dt * 28
+        sun_shell_3.rotation_x += dt * 11
+        sun_shell_3.texture_offset = Vec2(t * 0.028, -t * 0.019)
+        sun_shell_3.scale = current_sun_radius * (1.198 + math.sin(t * 6.2) * 0.038 + math.sin(t * 13.5 + 0.8) * 0.017)
+        sun_shell_3.color = color.rgba(
+            255,
+            int(64 + math.sin(t * 5.4) * 20),
+            int(0 + max(0, math.sin(t * 8.1)) * 10),
+            int(18 + math.sin(t * 6.7 + 0.9) * 8),
+        )
+        for ring_index, flame_root in enumerate(flame_roots):
+            flame_root.rotation_z += dt * (7 + ring_index * 1.6)
+            flame_root.rotation_y += dt * (3.5 if ring_index % 2 == 0 else -3.5)
+
+        for tongue, ring_index, index in flame_tongues:
+            phase = t * (2.6 + index * 0.13) + index * 0.8
+            angle = math.tau * (index / flame_count)
+            radial = flame_surface_radius * (1.02 + ring_index * 0.012) + math.sin(phase * 1.8) * current_sun_radius * 0.028
+            tongue.rotation_y = index * (360 / flame_count) + math.sin(phase) * 14
+            tongue.rotation_z = index * (360 / flame_count) + math.sin(phase * 1.2) * 18
+            tongue.rotation_x = 90 + math.sin(phase * 0.7) * 11
+            tongue.position = Vec3(math.cos(angle) * radial, math.sin(angle) * radial, math.sin(phase * 1.5) * current_sun_radius * (0.024 + ring_index * 0.004))
+            tongue.scale = Vec2(
+                current_sun_radius * (0.17 + math.sin(phase * 1.7) * 0.03),
+                current_sun_radius * (0.47 + math.sin(phase * 2.4) * 0.12 + ring_index * 0.03),
+            )
+            tongue.color = color.rgba(
+                255,
+                int(140 + math.sin(phase * 1.5) * 28),
+                int(24 + max(0, math.sin(phase * 2.2)) * 20),
+                int(28 + math.sin(phase * 2.0 + 0.4) * 12 + ring_index * 2),
+            )
+        earth_clouds.rotation_y += dt * 6.5
+        earth_night.rotation_y += dt * 0.8
+        current_saturn_radius = float(saturn.body.scale_x)
+        saturn_ring_back_entity.scale = current_saturn_radius * 2.32
+        saturn_ring_entity.scale = current_saturn_radius * 2.32
+        saturn_ring_back_entity.rotation_z = 0
+        saturn_ring_entity.rotation_z = 0
+        space_panorama.position = camera.world_position
+
+        for body in planets:
+            body.update(dt, simulation_speed)
+
+        if camera_mode in ('earth_follow', 'transition_follow'):
+            anti_sun_direction = (target_body.anchor.world_position - sun.anchor.world_position).normalized()
+            orbit_normal = target_body.orbit_plane.up.normalized()
+            tangential_direction = orbit_normal.cross(anti_sun_direction).normalized()
+            leveled_vertical = orbit_normal * (0.08 if target_body.name == 'Earth' else 0.18)
+            follow_distance = follow_distances.get(target_body.name, 6.0)
+            target_position = target_body.anchor.world_position + anti_sun_direction * follow_distance + tangential_direction * (follow_distance * 0.08) + leveled_vertical
+            focus_lerp_speed = 4.2 if camera_mode == 'earth_follow' else 2.8
+            up_lerp_speed = 3.4 if camera_mode == 'earth_follow' else 2.4
+            move_lerp_speed = 3.5 if camera_mode == 'earth_follow' else 2.6
+            follow_focus_point = Vec3(
+                lerp(follow_focus_point.x, target_body.anchor.world_position.x, dt * focus_lerp_speed),
+                lerp(follow_focus_point.y, target_body.anchor.world_position.y, dt * focus_lerp_speed),
+                lerp(follow_focus_point.z, target_body.anchor.world_position.z, dt * focus_lerp_speed),
+            )
+            follow_up_vector = Vec3(
+                lerp(follow_up_vector.x, orbit_normal.x, dt * up_lerp_speed),
+                lerp(follow_up_vector.y, orbit_normal.y, dt * up_lerp_speed),
+                lerp(follow_up_vector.z, orbit_normal.z, dt * up_lerp_speed),
+            )
+            if follow_up_vector.length() < 0.001:
+                follow_up_vector = orbit_normal
+            else:
+                follow_up_vector = follow_up_vector.normalized()
+            camera.world_position = Vec3(
+                lerp(camera.world_position.x, target_position.x, dt * move_lerp_speed),
+                lerp(camera.world_position.y, target_position.y, dt * move_lerp_speed),
+                lerp(camera.world_position.z, target_position.z, dt * move_lerp_speed),
+            )
+            camera.look_at(follow_focus_point, up=follow_up_vector)
+            if camera_mode == 'transition_follow':
+                transition_timer += dt
+                if transition_timer >= transition_duration:
+                    camera_mode = 'earth_follow'
+                    refresh_target_ui()
+        elif camera_mode == 'transition_overview':
+            overview_focus = sun.anchor.world_position
+            overview_up = Vec3(0, 1, 0)
+            follow_focus_point = Vec3(
+                lerp(follow_focus_point.x, overview_focus.x, dt * 2.4),
+                lerp(follow_focus_point.y, overview_focus.y, dt * 2.4),
+                lerp(follow_focus_point.z, overview_focus.z, dt * 2.4),
+            )
+            follow_up_vector = Vec3(
+                lerp(follow_up_vector.x, overview_up.x, dt * 2.2),
+                lerp(follow_up_vector.y, overview_up.y, dt * 2.2),
+                lerp(follow_up_vector.z, overview_up.z, dt * 2.2),
+            )
+            if follow_up_vector.length() < 0.001:
+                follow_up_vector = overview_up
+            else:
+                follow_up_vector = follow_up_vector.normalized()
+            camera.world_position = Vec3(
+                lerp(camera.world_position.x, overview_position.x, dt * 2.6),
+                lerp(camera.world_position.y, overview_position.y, dt * 2.6),
+                lerp(camera.world_position.z, overview_position.z, dt * 2.6),
+            )
+            camera.look_at(follow_focus_point, up=follow_up_vector)
+            transition_timer += dt
+            if transition_timer >= transition_duration:
+                world_position = Vec3(camera.world_position)
+                world_rotation = Vec3(camera.world_rotation)
+                editor_camera.position = world_position
+                editor_camera.rotation = world_rotation
+                editor_camera.enabled = True
+                camera.parent = editor_camera
+                camera.position = Vec3(0, 0, 0)
+                camera.rotation = Vec3(0, 0, 0)
+                editor_camera.target_z = 0
+                camera_mode = 'overview'
+                refresh_target_ui()
+
+    return update
+
+
+def main():
+    parser = argparse.ArgumentParser(description='3D Solar System in Python/Ursina')
+    parser.add_argument('--auto-close', type=float, default=0.0, help='Automatically close after N seconds for testing')
+    args = parser.parse_args()
+
+    ensure_assets()
+    app = Ursina(borderless=False)
+    update_fn = build_scene()
+    globals()['update'] = update_fn
+
+    if args.auto_close > 0:
+        invoke(application.quit, delay=args.auto_close)
+
+    app.run()
+
+
+if __name__ == '__main__':
+    main()
