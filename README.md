@@ -64,7 +64,7 @@ dist\SolarSystem3D\SolarSystem3D.exe
 - `_internal/`
 
 GitHub Release 下载：
-- https://github.com/pxzleo/solar-system-simulation-tool/releases/tag/v0.2.0
+- https://github.com/pxzleo/solar-system-simulation-tool/releases/tag/v0.2.1
 
 ## 项目说明
 
