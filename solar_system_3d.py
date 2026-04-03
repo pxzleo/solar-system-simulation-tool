@@ -875,7 +875,7 @@ def spawn_belt_asteroid(parent: Entity, inner_radius: float, outer_radius: float
 def build_scene():
     dark_space = color.black
     ui_font = resolve_ui_font_reference()
-    window.title = 'AI生成-太阳系模拟演示系统-flicube.com'
+    window.title = '太阳系模拟演示工具-flicube.com'
     window.color = dark_space
     window.fps_counter.enabled = True
     window.exit_button.visible = False
@@ -1783,9 +1783,9 @@ def main():
     args = parser.parse_args()
 
     ensure_assets()
-    loadPrcFileData('', 'window-title AI生成-太阳系模拟演示系统-flicube.com')
-    app = Ursina(title='AI生成-太阳系模拟演示系统-flicube.com', borderless=False)
-    window.title = 'AI生成-太阳系模拟演示系统-flicube.com'
+    loadPrcFileData('', 'window-title 太阳系模拟演示工具-flicube.com')
+    app = Ursina(title='太阳系模拟演示工具-flicube.com', borderless=False)
+    window.title = '太阳系模拟演示工具-flicube.com'
     application.asset_folder = ROOT
     update_fn = build_scene()
     globals()['update'] = update_fn
