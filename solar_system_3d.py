@@ -534,6 +534,10 @@ def orbit_mesh(radius: float, segments: int = 160, eccentricity: float = 0.0) ->
     return Mesh(vertices=vertices, mode='line', thickness=1, static=True)
 
 
+PLANET_ORBIT_THICKNESS = 2
+MOON_ORBIT_THICKNESS = 1
+
+
 def scaled_orbit_speed(period_days: float, earth_speed: float = 10.0, exponent: float = 0.45) -> float:
     return earth_speed * ((365.256 / period_days) ** exponent)
 
@@ -703,6 +707,7 @@ class OrbitalBody:
         eccentricity: float = 0,
         parent=scene,
         orbit_color=color.rgba(90, 110, 140, 80),
+        orbit_thickness: int = PLANET_ORBIT_THICKNESS,
         orbit_y: float = 0,
     ) -> None:
         self.name = name
@@ -730,7 +735,9 @@ class OrbitalBody:
         self.orbit = None
         self.moons = []
         if distance > 0:
-            self.orbit = Entity(parent=self.orbit_plane, model=orbit_mesh(distance, eccentricity=eccentricity), color=orbit_color)
+            self.orbit = Entity(parent=self.orbit_plane, model=orbit_mesh(distance, eccentricity=eccentricity), texture='assets/orbit_light.png', color=orbit_color)
+            if hasattr(self.orbit.model, 'thickness'):
+                self.orbit.model.thickness = orbit_thickness
 
     def add_moon(self, moon: OrbitalBody) -> None:
         self.moons.append(moon)
@@ -984,6 +991,7 @@ def build_scene():
             orbit_phase=orbit_phase,
             spin_axis_heading=0,
             eccentricity=eccentricity,
+            orbit_thickness=PLANET_ORBIT_THICKNESS,
         )
         body.axis_heading.rotation_y = compute_spin_axis_heading(pole_ra, pole_dec, body.orbit_plane.up)
         planet_bodies[name] = body
@@ -1105,6 +1113,7 @@ def build_scene():
             eccentricity=eccentricity,
             parent=parent_transform,
             orbit_color=orbit_color,
+            orbit_thickness=MOON_ORBIT_THICKNESS,
         )
         moon.visual_root.rotation_y = texture_rotation_y
         parent_body.add_moon(moon)
