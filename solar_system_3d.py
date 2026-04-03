@@ -808,7 +808,7 @@ def spawn_asteroid(parent: Entity, spawn_radius: float) -> dict[str, Any]:
     start_position = entry_direction * spawn_radius + tangential * RNG.uniform(-10.0, 10.0)
     target_position = Vec3(RNG.uniform(-18.0, 18.0), RNG.uniform(-6.0, 6.0), RNG.uniform(-18.0, 18.0))
     fly_direction = (target_position - start_position).normalized()
-    base_scale = RNG.uniform(0.14, 0.34)
+    base_scale = RNG.uniform(0.14, 0.34) * 0.5
     fast_pass = RNG.random() < 0.24
     speed = RNG.uniform(10.0, 17.0) if fast_pass else RNG.uniform(5.5, 11.5)
     asteroid = Entity(
@@ -858,7 +858,7 @@ def spawn_belt_asteroid(parent: Entity, inner_radius: float, outer_radius: float
     orbit_angle = RNG.uniform(0.0, math.tau)
     belt_thickness = 2.2 + (orbit_radius - inner_radius) / max(1.0, outer_radius - inner_radius) * 0.9
     vertical_offset = RNG.uniform(-belt_thickness, belt_thickness)
-    base_scale = RNG.uniform(0.04, 0.11) * 5.0 * 0.7
+    base_scale = RNG.uniform(0.04, 0.11) * 5.0 * 0.7 * 0.5
     asteroid = Entity(
         parent=parent,
         model='sphere',
@@ -977,7 +977,7 @@ def build_scene():
         pole_dec = float(data['pole_dec'])
         orbit_au = float(real['orbit_au'])
         radius_km = float(real['radius_km'])
-        orbit_distance = scaled_planet_distance(orbit_au, VISUAL_SCALE['planet_distance_factor'], VISUAL_SCALE['planet_distance_exponent'])
+        orbit_distance = scaled_planet_distance(orbit_au, VISUAL_SCALE['planet_distance_factor'], VISUAL_SCALE['planet_distance_exponent']) * 1.5
         minimum_orbit_distance = sun_radius * 0.9 + scaled_visual_radius(radius_km, VISUAL_SCALE['planet_radius_factor'], VISUAL_SCALE['min_planet_radius']) * 2.2
         body = OrbitalBody(
             name,
